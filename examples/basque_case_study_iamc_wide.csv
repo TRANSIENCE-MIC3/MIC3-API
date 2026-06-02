@@ -7,22 +7,22 @@ FORECAST-Sites,Scenario 6,Spain,Price|Secondary Energy|Solids|Biomass,EUR/GJ,10.
 FORECAST-Sites,Scenario 6,Spain,Price|Secondary Energy|Heat|Solar,EUR/GJ,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
 FORECAST-Sites,Scenario 6,Spain,Price|Secondary Energy|Hydrogen,EUR/GJ,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,45.38517884,42.7894343,40.19368975,37.59794521,35.00220066,32.40645611,31.25526383,30.10407154,28.95287925,27.80168696,26.65049467,26.28182395,25.91315322,25.5444825,25.17581177,24.80714105,24.72922374,24.65130644,24.57338914,24.49547184,24.41755454,24.41755454,24.41755454,24.41755454,24.41755454,24.41755454
 FORECAST-Sites,Scenario 6,Spain,Price|Secondary Energy|Liquids|Biomass,EUR/GJ,25.0,25.0,25.0,25.0,25.0,25.0,25.0,25.0,25.0,25.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,22.0,22.0,22.0,22.0,22.0,22.0,22.0,22.0,22.0,22.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Electricity,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Fuel Oil,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Coal,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Gas,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Solar,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|H2,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Subsidies|Ethanol,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Electricity,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Fuel Oil,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Coal,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Gas,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Solar,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|H2,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
-FORECAST-Sites,Scenario 6,Spain,Taxes|Ethanol,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Electricity,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Liquids|Oil,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Solids|Coal,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Gases|Gas,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Solids|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Heat|Solar,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Hydrogen,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Subsidies|Secondary Energy|Liquids|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,0.0,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Electricity,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Liquids|Oil,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Solids|Coal,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Gases|Gas,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Solids|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Heat|Solar,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Hydrogen,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
+FORECAST-Sites,Scenario 6,Spain,Taxes|Secondary Energy|Liquids|Biomass,EUR/GJ,,,,,,,,,,,0.0,,,,,,,,,,,,,,,,,,,,,,,,,0.0
 FORECAST-Sites,Scenario 6,Spain,Secondary Energy|Electricity,EJ/yr,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0
 FORECAST-Sites,Scenario 6,Spain,Secondary Energy|Liquids|Oil,EJ/yr,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0
 FORECAST-Sites,Scenario 6,Spain,Secondary Energy|Solids|Coal,EJ/yr,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0
