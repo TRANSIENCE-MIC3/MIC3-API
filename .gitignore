@@ -29,3 +29,9 @@ Icon?
 *.swo
 .#*
 \#*#
+
+# Local development folders and files
+/.idea/
+/examples/
+/AGENTS.md
+/PROJECT_STATUS.md
