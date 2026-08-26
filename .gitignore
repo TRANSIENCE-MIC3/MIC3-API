@@ -35,3 +35,13 @@ Icon?
 /examples/
 /AGENTS.md
 /PROJECT_STATUS.md
+
+# Python
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.venv/
+/venv/
+
+# Local environment configuration
+/.env
