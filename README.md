@@ -29,12 +29,14 @@ Environment variables override values from the file.
 | --- | --- |
 | `APP_ENV` | `development` |
 | `APP_NAME` | `Modeling Platform API` |
-| `APP_VERSION` | `0.1.0` |
+
+The application version is defined once in `pyproject.toml`. Release Git tags
+use the same version with a `v` prefix, for example `v0.1.1`.
 
 Run the API from the repository root:
 
 ```powershell
-python -m uvicorn modeling_platform.main:create_app --factory --app-dir src --host 0.0.0.0 --port 8000
+python -m uvicorn modeling_platform.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
 Then open <http://localhost:8000/health> or

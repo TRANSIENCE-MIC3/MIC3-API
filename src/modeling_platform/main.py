@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from modeling_platform import __version__
 from modeling_platform.api.router import api_router
 from modeling_platform.core.config import Settings
 
@@ -9,7 +10,7 @@ def create_app() -> FastAPI:
     settings = Settings()
     app = FastAPI(
         title=settings.app_name,
-        version=settings.app_version,
+        version=__version__,
         docs_url="/docs",
         openapi_url="/openapi.json",
     )
