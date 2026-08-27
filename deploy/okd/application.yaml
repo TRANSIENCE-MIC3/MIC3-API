@@ -26,8 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          # Publish 0.1.2 and pin its verified digest before deploying.
-          image: ghcr.io/transience-mic3/mic3-api:0.1.2
+          image: ghcr.io/transience-mic3/mic3-api:0.1.2@sha256:f9991356dcd36448d3d7ea202fa96b16e5d07db216cd9e9f200b8f5db13b39f9
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
