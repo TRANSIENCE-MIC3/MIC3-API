@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "modeling-platform-api"
-version = "0.1.1"
-description = "HTTP API for the Modeling Platform"
+name = "mic3-api"
+version = "0.1.2"
+description = "mic3-api HTTP service for the modeling platform"
 readme = "README.md"
 requires-python = ">=3.13"
 dynamic = ["dependencies"]

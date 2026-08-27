@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 
-from modeling_platform import __version__
-from modeling_platform.api.router import api_router
-from modeling_platform.core.config import Settings
+from mic3_api import __version__
+from mic3_api.api.router import api_router
+from mic3_api.core.config import Settings
 
 
 def create_app() -> FastAPI:
