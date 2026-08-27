@@ -4,7 +4,7 @@ SPDX-FileCopyrightText: 2026 Fraunhofer-Gesellschaft e.V.
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# Modeling Platform Architecture PRD
+# mic3-api Architecture PRD
 
 ## Recommended Tech Stack
 

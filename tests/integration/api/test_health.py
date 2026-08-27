@@ -1,8 +1,9 @@
 from importlib.metadata import version
 
+import pytest
 from fastapi.testclient import TestClient
 
-from modeling_platform.main import create_app
+from mic3_api.main import create_app
 
 
 def test_health_returns_expected_response() -> None:
@@ -22,7 +23,8 @@ def test_docs_are_available() -> None:
     assert response.status_code == 200
 
 
-def test_openapi_schema_contains_health_endpoint() -> None:
+def test_openapi_schema_contains_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_NAME", "Integration Test API")
     client = TestClient(create_app())
 
     response = client.get("/openapi.json")
@@ -30,4 +32,5 @@ def test_openapi_schema_contains_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert "/health" in schema["paths"]
-    assert schema["info"]["version"] == version("modeling-platform-api")
+    assert schema["info"]["title"] == "Integration Test API"
+    assert schema["info"]["version"] == version("mic3-api")

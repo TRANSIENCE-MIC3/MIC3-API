@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from modeling_platform.api.routes.health import router as health_router
+from mic3_api.api.routes.health import router as health_router
 
 
 api_router = APIRouter()

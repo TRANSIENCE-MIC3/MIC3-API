@@ -14,4 +14,4 @@ RUN python -m pip install --no-cache-dir --no-deps .
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "modeling_platform.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "mic3_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     """Application settings loaded from the environment."""
 
     app_env: str = "development"
-    app_name: str = "Modeling Platform API"
+    app_name: str = "mic3-api"
 
     model_config = SettingsConfigDict(
         env_file=".env",
