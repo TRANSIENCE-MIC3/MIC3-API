@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+
+metadata:
+  name: test-model-job
+
+spec:
+  backoffLimit: 0
+
+  template:
+    spec:
+      restartPolicy: Never
+
+      containers:
+        - name: model
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Model job started"
+              sleep 20
+              echo "Model job completed"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
