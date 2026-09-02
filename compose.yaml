@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: quay.io/sclorg/postgresql-18-c9s@sha256:e8d01a0c455cb4a77944b0e34e8d7c5ccc6c76276025840b019ae0383573efd5
+    environment:
+      POSTGRESQL_DATABASE: ${DB_NAME:-mic3}
+      POSTGRESQL_USER: ${DB_USER:-mic3_api}
+      POSTGRESQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRESQL_LOG_DESTINATION: /dev/stderr
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    volumes:
+      - mic3-postgres-data:/var/lib/pgsql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRESQL_USER}" -d "$${POSTGRESQL_DATABASE}"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+volumes:
+  mic3-postgres-data:
