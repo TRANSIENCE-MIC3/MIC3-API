@@ -30,7 +30,9 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 Review `.env` and use a local-only database password, never EOSC credentials.
-The file is excluded from Git and Docker builds.
+The file is excluded from Git and Docker builds. If `.env` already existed,
+copy the new `KEYCLOAK_*` entries from `.env.example` and replace their example
+passwords with local-only values.
 
 ```powershell
 docker compose up -d --wait postgres
@@ -39,9 +41,22 @@ python -m uvicorn mic3_api.main:create_app --factory --reload
 ```
 
 Then open <http://localhost:8000/health>, <http://localhost:8000/ready>, or
-<http://localhost:8000/docs>. Compose runs PostgreSQL only; the API runs on the
-host for development. PostgreSQL uses `127.0.0.1:5433` and a persistent named
-volume, independently of any native PostgreSQL installation.
+<http://localhost:8000/docs>. The command above starts only the MIC3 PostgreSQL
+service; the API runs on the host for development. PostgreSQL uses
+`127.0.0.1:5433` and a persistent named volume, independently of any native
+PostgreSQL installation.
+
+Start the separate local Keycloak database and identity provider with:
+
+```powershell
+docker compose up -d --wait keycloak
+$env:OIDC_ISSUER_URL = "http://localhost:8080/realms/mic3"
+python -m pytest tests/smoke/test_oidc.py
+```
+
+The Admin Console is at <http://localhost:8080/admin/>. The reproducible `mic3`
+realm contains the `mic3-api` audience, a PKCE-enabled `mic3-local` browser
+client, and the local member identity configured through `.env`.
 
 ## Tests
 
