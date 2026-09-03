@@ -1,9 +1,10 @@
 # mic3-api
 
 This repository contains mic3-api, the HTTP API for the modeling platform. The
-PostgreSQL connectivity foundation is deployed on EOSC/OKD: the API provides
-database readiness alongside dependency-independent health checks. Application
-schema, users, and authentication follow in later changes.
+PostgreSQL connectivity is deployed on EOSC/OKD, and the initial user,
+external-identity, and member-role schema is managed through Alembic. The API
+provides database readiness alongside dependency-independent health checks;
+authentication follows in later changes.
 
 See the [installation and deployment guide](docs/setup-and-deployment.md) for
 local setup, tests, and EOSC deployment.
@@ -33,7 +34,7 @@ The file is excluded from Git and Docker builds.
 
 ```powershell
 docker compose up -d --wait postgres
-python -m alembic current
+python -m alembic upgrade head
 python -m uvicorn mic3_api.main:create_app --factory --reload
 ```
 
@@ -44,7 +45,15 @@ volume, independently of any native PostgreSQL installation.
 
 ## Tests
 
-Run the isolated tests without Docker or network access:
+Unit and API-only integration tests run without Docker or network access:
+
+```powershell
+python -m pytest tests/unit tests/integration/api
+```
+
+With Docker running, execute the complete unit/integration suite. Testcontainers
+starts and removes a disposable PostgreSQL instance for schema and migration
+tests; it does not use the persistent Compose or EOSC databases.
 
 ```powershell
 python -m pytest tests/unit tests/integration

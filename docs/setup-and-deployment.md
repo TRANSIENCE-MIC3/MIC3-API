@@ -28,16 +28,25 @@ volume and existing database/user names. A native PostgreSQL install is not need
 ### API
 
 ```text
-python -m alembic current
+python -m alembic upgrade head
 python -m uvicorn mic3_api.main:create_app --factory --reload
 ```
 
-Alembic currently checks connectivity only; there are no application migrations yet.
+Alembic creates or updates the MIC3-owned application schema. It does not run
+automatically when FastAPI starts.
 The API runs on your host. Open [Swagger UI](http://localhost:8000/docs).
 
 ### Tests
 
-Unit/integration tests do not need running services:
+Unit and API-only integration tests do not need running services:
+
+```text
+python -m pytest tests/unit tests/integration/api
+```
+
+The complete integration suite requires a running Docker engine. Testcontainers
+starts and removes its own disposable PostgreSQL instance, separate from the
+persistent Compose database and any EOSC database:
 
 ```text
 python -m pytest tests/unit tests/integration
