@@ -6,7 +6,9 @@ resources:
   - application.yaml
 
 configMapGenerator:
-  - name:  -keycloak-realm
+  - name: mic3-keycloak-realm
     files:
       - mic3-realm.json
 
+generatorOptions:
+  disableNameSuffixHash: true

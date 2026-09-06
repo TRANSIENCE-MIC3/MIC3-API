@@ -17,6 +17,10 @@ PENDING_RELEASE_IMAGE = (
     "ghcr.io/transience-mic3/mic3-api:0.1.4"
     "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )
+CONFIG_CLI_IMAGE = (
+    "quay.io/adorsys/keycloak-config-cli:6.5.1-26@sha256:"
+    "1b22dfaa9ae0c71f74b0342f9221a6510f272da5def683dbba26a98e6b1b1411"
+)
 
 
 def load_yaml_documents(path: Path) -> list[dict[str, Any]]:
@@ -50,8 +54,7 @@ def test_eosc_realm_is_closed_and_contains_no_seeded_authority() -> None:
     assert realm["registrationAllowed"] is False
     assert realm["resetPasswordAllowed"] is False
     assert realm["verifyEmail"] is False
-    assert realm["users"] == []
-    assert "roles" not in realm
+    assert {"users", "roles", "groups"}.isdisjoint(realm)
 
 
 def test_eosc_realm_clients_have_the_required_oidc_contract() -> None:
@@ -142,7 +145,7 @@ def test_keycloak_uses_production_settings_and_restricted_runtime() -> None:
 
     assert deployment["spec"]["replicas"] == 1
     assert deployment["spec"]["strategy"]["type"] == "Recreate"
-    assert keycloak["args"] == ["start", "--import-realm"]
+    assert keycloak["args"] == ["start"]
     assert DIGEST_IMAGE.fullmatch(keycloak["image"])
     assert keycloak["resources"] == {
         "requests": {"cpu": "500m", "memory": "1Gi"},
@@ -154,6 +157,7 @@ def test_keycloak_uses_production_settings_and_restricted_runtime() -> None:
     assert keycloak["securityContext"]["capabilities"]["drop"] == ["ALL"]
     assert env["KC_HTTP_ENABLED"]["value"] == "true"
     assert env["KC_PROXY_HEADERS"]["value"] == "xforwarded"
+    assert env["KC_HOSTNAME_BACKCHANNEL_DYNAMIC"]["value"] == "true"
     assert env["KC_HOSTNAME"]["valueFrom"]["configMapKeyRef"]["name"] == (
         "mic3-keycloak-runtime"
     )
@@ -168,6 +172,71 @@ def test_keycloak_uses_production_settings_and_restricted_runtime() -> None:
         keycloak["readinessProbe"],
         keycloak["livenessProbe"],
     )} == {"management"}
+    assert "volumes" not in pod
+    assert "volumeMounts" not in keycloak
+
+
+def test_keycloak_config_map_has_a_stable_name() -> None:
+    kustomization = yaml.safe_load(
+        (KEYCLOAK / "kustomization.yaml").read_text(encoding="utf-8")
+    )
+
+    assert kustomization["configMapGenerator"] == [
+        {"name": "mic3-keycloak-realm", "files": ["mic3-realm.json"]}
+    ]
+    assert kustomization["generatorOptions"]["disableNameSuffixHash"] is True
+    assert kustomization["resources"] == [
+        "prerequisites.yaml",
+        "application.yaml",
+    ]
+
+
+def test_keycloak_configuration_job_is_explicit_and_restricted() -> None:
+    job = load_yaml_documents(KEYCLOAK / "configure.yaml")[0]
+    config = container(job)
+    pod = job["spec"]["template"]["spec"]
+    env = environment_by_name(job)
+
+    assert job["kind"] == "Job"
+    assert "name" not in job["metadata"]
+    assert job["metadata"]["generateName"] == "mic3-keycloak-configure-"
+    assert job["spec"]["ttlSecondsAfterFinished"] == 86400
+    assert job["spec"]["activeDeadlineSeconds"] == 300
+    assert config["image"] == CONFIG_CLI_IMAGE
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["securityContext"]["runAsNonRoot"] is True
+    assert config["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "capabilities": {"drop": ["ALL"]},
+    }
+    assert env["KEYCLOAK_URL"]["value"] == "http://mic3-keycloak:8080"
+    assert env["KEYCLOAK_USER"]["valueFrom"]["secretKeyRef"]["name"] == (
+        "mic3-keycloak-bootstrap-admin"
+    )
+    assert env["KEYCLOAK_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == (
+        "mic3-keycloak-bootstrap-admin"
+    )
+    assert env["IMPORT_FILES_LOCATIONS"]["value"] == "file:/config/*"
+    assert env["IMPORT_VALIDATE"]["value"] == "true"
+    assert env["IMPORT_REMOTESTATE_ENABLED"]["value"] == "true"
+    assert env["IMPORT_VARSUBSTITUTION_ENABLED"]["value"] == "true"
+    assert env["LOGGING_LEVEL_ROOT"]["value"] == "INFO"
+    assert all("TRACE" not in str(entry).upper() for entry in env.values())
+    secret_names = {
+        entry["valueFrom"]["secretKeyRef"]["name"]
+        for entry in env.values()
+        if "valueFrom" in entry
+    }
+    assert secret_names == {"mic3-keycloak-bootstrap-admin"}
+    assert {volume["name"] for volume in pod["volumes"]} == {
+        "realm-config",
+        "temporary-files",
+    }
+    realm_volume = next(
+        volume for volume in pod["volumes"] if volume["name"] == "realm-config"
+    )
+    assert realm_volume["configMap"]["name"] == "mic3-keycloak-realm"
 
 
 def test_api_receives_oidc_settings_from_the_dedicated_secret() -> None:
@@ -188,7 +257,7 @@ def test_api_receives_oidc_settings_from_the_dedicated_secret() -> None:
 
 def test_migration_job_runs_only_alembic_with_mic3_database_settings() -> None:
     job = find_resource(
-        load_yaml_documents(OKD / "migration-0.1.4.yaml"),
+        load_yaml_documents(OKD / "migration.yaml"),
         "Job",
         "mic3-api-migrate-0-1-4",
     )
@@ -215,7 +284,7 @@ def test_release_image_promotion_is_explicit_and_updates_both_workloads() -> Non
         load_yaml_documents(OKD / "application.yaml"), "Deployment", "mic3-api"
     )
     migration = find_resource(
-        load_yaml_documents(OKD / "migration-0.1.4.yaml"),
+        load_yaml_documents(OKD / "migration.yaml"),
         "Job",
         "mic3-api-migrate-0-1-4",
     )
@@ -239,9 +308,10 @@ def test_manifests_do_not_commit_cluster_specific_or_secret_resources() -> None:
     paths = [
         OKD / "application.yaml",
         OKD / "postgres.yaml",
-        OKD / "migration-0.1.4.yaml",
+        OKD / "migration.yaml",
         KEYCLOAK / "prerequisites.yaml",
         KEYCLOAK / "application.yaml",
+        KEYCLOAK / "configure.yaml",
     ]
 
     for path in paths:

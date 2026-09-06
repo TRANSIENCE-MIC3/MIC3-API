@@ -9,7 +9,7 @@ Linux containers. Run commands from the repository root.
 
 Copy [`.env.example`](../.env.example) to `.env` if it does not exist. Set a
 local-only `DB_PASSWORD`; keep the other defaults. For an existing `.env`, copy
-the `OIDC_*` and `KEYCLOAK_*` entries from `.env.example`. Replace the three
+the `OIDC_*` and `KEYCLOAK_*` entries from `.env.example`. Replace the two
 example Keycloak passwords with distinct local-only values. Never commit
 `.env`.
 
@@ -37,23 +37,28 @@ Start Keycloak and its database:
 
 ```text
 docker compose up -d --wait keycloak
+docker compose run --rm keycloak-config
 docker compose ps
 ```
 
-The first start imports the checked-in `mic3` realm and creates:
+The first command starts only Keycloak and its PostgreSQL database. The second
+runs the pinned `keycloak-config-cli` image as a one-shot task after Keycloak is
+healthy. It creates the realm when absent or reconciles the checked-in desired
+configuration when the realm already exists. Run the configuration command
+after every accepted realm configuration change.
+
+The desired local configuration includes:
 
 - the bearer-only `mic3-api` resource-server client;
 - the public `mic3-local` browser client using authorization code flow with
   PKCE, the standard OIDC subject claim, and the `mic3-api` access-token
   audience;
 - local self-registration without email verification, because the development
-  stack has no SMTP service;
-- one non-elevated local identity using `KEYCLOAK_DEV_USERNAME`,
-  `KEYCLOAK_DEV_EMAIL`, and `KEYCLOAK_DEV_PASSWORD` from `.env`.
+  stack has no SMTP service.
 
 Open the [Admin Console](http://localhost:8080/admin/) and sign in with
 `KEYCLOAK_ADMIN_USERNAME` and `KEYCLOAK_ADMIN_PASSWORD`. Select the `mic3`
-realm to inspect its clients and local identity. The master-realm administrator
+realm to inspect its clients and local users. The master-realm administrator
 is Keycloak infrastructure administration only and is not a MIC3 application
 administrator.
 
@@ -66,19 +71,22 @@ $env:OIDC_ISSUER_URL = "http://localhost:8080/realms/mic3"
 python -m pytest tests/smoke/test_oidc.py
 ```
 
-The issuer is `http://localhost:8080/realms/mic3`. Keycloak imports a realm at
-startup only when it does not already exist, so editing the JSON does not
-overwrite persisted local realm state. To intentionally re-import it, delete
-only the disposable `mic3` realm through the Admin Console and restart
-Keycloak. This removes locally registered Keycloak test identities but does not
-touch the MIC3 application database:
+The issuer is `http://localhost:8080/realms/mic3`. Realm settings, clients,
+client scopes, and protocol mappers declared in
+`deploy/local/keycloak/config/mic3-realm.json` are authoritative: a later
+reconciliation can restore manual Admin Console edits to those resources.
+Users, roles, and groups are deliberately absent from the file and are not
+managed or deleted by reconciliation. You can experiment in the Admin Console,
+then copy accepted configuration into the JSON and verify it by running the
+same one-shot task again:
 
 ```text
-docker compose restart keycloak
+docker compose run --rm keycloak-config
 ```
 
-Never use `docker compose down --volumes` merely to refresh the realm because
-that also deletes the persistent MIC3 PostgreSQL volume.
+The task must exit successfully before treating a configuration change as
+applied. Do not delete the realm, the Keycloak volume, or the MIC3 PostgreSQL
+volume to refresh configuration.
 
 ### Postman login without a frontend
 
@@ -98,8 +106,8 @@ replace. In Postman, create a request or collection using **OAuth 2.0**, select
 | Code Challenge Method | `SHA-256` |
 
 Leave client authentication unset/no-secret. Select **Get New Access Token**;
-Postman opens the `mic3` realm login page. Sign in as the seeded local member or
-use the **Register** link to create another local test identity. Use the token
+Postman opens the `mic3` realm login page. Use the **Register** link to create a
+local test identity, or sign in with one you previously registered. Use the token
 on a `GET http://localhost:8000/users/me` request. Postman sends it as:
 
 ```text
@@ -139,8 +147,9 @@ python -m pytest tests/unit tests/integration/api/test_health.py tests/integrati
 ```
 
 The complete integration suite requires a running Docker engine. Testcontainers
-starts and removes its own disposable PostgreSQL instance, separate from the
-persistent Compose database and any EOSC database:
+starts and removes disposable PostgreSQL and Keycloak instances, including a
+real `keycloak-config-cli` compatibility check. These containers are separate
+from the persistent Compose databases and any EOSC resources:
 
 ```text
 python -m pytest tests/unit tests/integration
@@ -199,8 +208,9 @@ them:
 oc project -q
 oc apply --dry-run=server -f deploy/okd/keycloak/prerequisites.yaml
 oc apply --dry-run=server -k deploy/okd/keycloak
+oc create --dry-run=server -f deploy/okd/keycloak/configure.yaml -o yaml | Out-Null
 oc apply --dry-run=server -f deploy/okd/application.yaml
-oc apply --dry-run=server -f deploy/okd/migration-0.1.4.yaml
+oc apply --dry-run=server -f deploy/okd/migration.yaml
 ```
 
 The existing one-time resources must remain available:
@@ -275,12 +285,16 @@ The generated Route hostname is deliberately absent from Git. As with the
 credential Secrets, stop and inspect an existing runtime ConfigMap or OIDC
 Secret rather than overwriting it implicitly.
 
-### 4. Deploy and verify Keycloak
+### 4. Deploy, configure, and verify Keycloak
 
 ```powershell
 oc apply -k deploy/okd/keycloak
 oc rollout status deployment/mic3-keycloak --timeout=300s
 oc logs deployment/mic3-keycloak --tail=150
+
+$configJob = oc create -f deploy/okd/keycloak/configure.yaml -o name
+oc wait --for=condition=complete $configJob --timeout=180s
+oc logs $configJob
 
 $discovery = Invoke-RestMethod "$oidcIssuer/.well-known/openid-configuration"
 if ($discovery.issuer -ne $oidcIssuer) {
@@ -289,6 +303,13 @@ if ($discovery.issuer -ne $oidcIssuer) {
 Invoke-RestMethod "$oidcIssuer/protocol/openid-connect/certs"
 ```
 
+Keycloak starts independently of realm configuration. The generated
+configuration Job runs the pinned `keycloak-config-cli` image, waits for the
+internal Keycloak Service, and then creates or reconciles the `mic3` realm
+through the Admin API. A non-zero Job result is a deployment blocker: inspect
+its logs and do not proceed to the API release. Completed configuration Jobs
+are automatically removed after one day.
+
 Run `Start-Process "$keycloakUrl/admin/"`, log in with the bootstrap
 administrator, select
 the `mic3` realm, and manually create a non-administrator test user. Set an
@@ -296,10 +317,14 @@ initial non-temporary password. The realm has no Keycloak application roles,
 and its bootstrap administrator belongs to Keycloak's `master` realm rather
 than MIC3.
 
-Keycloak imports `mic3-realm.json` only when the `mic3` realm does not already
-exist. Reapplying the Deployment does not update a persisted realm. Any later
-realm change therefore needs an explicit, reviewed administrative migration;
-do not delete the Keycloak PVC to force an import.
+Realm settings, the `mic3-api` and `mic3-postman` clients, client scopes, and
+protocol mappers declared in `mic3-realm.json` are authoritative. Users, roles,
+and groups are deliberately omitted, so reconciliation does not manage or
+delete them. Manual Admin Console changes to managed resources can be restored
+on the next run. After experimenting, record accepted changes in the JSON,
+review them, update the ConfigMap with `oc apply -k deploy/okd/keycloak`, and run
+a new generated configuration Job using the commands above. Do not delete the
+realm or Keycloak PVC to apply a change.
 
 In Postman, use **Authorization Code (With PKCE)** with:
 
@@ -327,7 +352,7 @@ publication:
    a tag that differs from `pyproject.toml` and runs all unit/integration tests.
 2. Copy the published linux/amd64 `sha256` manifest digest from GHCR. In a
    promotion commit, set this exact reference in both
-   `deploy/okd/application.yaml` and `deploy/okd/migration-0.1.4.yaml`:
+   `deploy/okd/application.yaml` and `deploy/okd/migration.yaml`:
 
 ```text
 ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:<published-64-character-digest>
@@ -338,7 +363,7 @@ contain the same immutable image reference:
 
 ```powershell
 rg "REPLACE_WITH_V0_1_4_DIGEST" deploy/okd
-rg "ghcr.io/transience-mic3/mic3-api" deploy/okd/application.yaml deploy/okd/migration-0.1.4.yaml
+rg "ghcr.io/transience-mic3/mic3-api" deploy/okd/application.yaml deploy/okd/migration.yaml
 python -m pytest tests/unit/infrastructure/test_okd_authentication_manifests.py
 ```
 
@@ -350,7 +375,7 @@ manifest from the source commit while its digest marker remains.
 Run the versioned one-shot Job before changing the API Deployment:
 
 ```powershell
-oc apply -f deploy/okd/migration-0.1.4.yaml
+oc apply -f deploy/okd/migration.yaml
 oc wait --for=condition=complete `
   job/mic3-api-migrate-0-1-4 `
   --timeout=180s

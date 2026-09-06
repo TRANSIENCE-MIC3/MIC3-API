@@ -53,14 +53,17 @@ Start the separate local Keycloak database and identity provider with:
 
 ```powershell
 docker compose up -d --wait keycloak
+docker compose run --rm keycloak-config
 $env:OIDC_ISSUER_URL = "http://localhost:8080/realms/mic3"
 python -m pytest tests/smoke/test_oidc.py
 ```
 
-The Admin Console is at <http://localhost:8080/admin/>. The reproducible `mic3`
-realm contains the `mic3-api` audience, a PKCE-enabled `mic3-local` browser
-client, local self-registration, and the member identity configured through
-`.env`. The detailed guide contains the exact Postman login settings.
+The one-shot configuration command declaratively creates or reconciles the
+`mic3` realm after Keycloak is ready. The realm contains the `mic3-api`
+audience, a PKCE-enabled `mic3-local` browser client, and local
+self-registration. Users are operational data and are never managed by the
+reconciler. The Admin Console is at <http://localhost:8080/admin/>; the detailed
+guide explains configuration ownership and the exact Postman login settings.
 
 ## Tests
 
@@ -106,7 +109,10 @@ The repository also contains a single-replica EOSC integration deployment for
 Keycloak 26.7.3 and its separate PostgreSQL 18 database. Both public services
 use OpenShift edge-TLS Routes; PostgreSQL and Keycloak's management port remain
 internal. The checked-in EOSC realm disables registration, email verification,
-and password reset until the production mail flow is implemented.
+and password reset until the production mail flow is implemented. Realm
+settings and OIDC clients are applied through a repeatable, one-shot
+`keycloak-config-cli` Job after Keycloak starts; users, roles, and groups remain
+outside declarative management.
 
 Release `0.1.4` uses a two-commit promotion: the source/tag commit publishes the
 image, then a promotion commit pins its resulting digest in the API Deployment

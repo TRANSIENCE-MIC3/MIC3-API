@@ -2,23 +2,29 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
 
-REALM_IMPORT = (
-    Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[3]
+REALM_CONFIG = (
+    ROOT
     / "deploy"
     / "local"
     / "keycloak"
-    / "import"
+    / "config"
     / "mic3-realm.json"
+)
+CONFIG_CLI_IMAGE = (
+    "quay.io/adorsys/keycloak-config-cli:6.5.1-26@sha256:"
+    "1b22dfaa9ae0c71f74b0342f9221a6510f272da5def683dbba26a98e6b1b1411"
 )
 
 
 def load_realm() -> dict[str, Any]:
-    with REALM_IMPORT.open(encoding="utf-8") as realm_file:
+    with REALM_CONFIG.open(encoding="utf-8") as realm_file:
         return json.load(realm_file)
 
 
-def test_realm_import_has_stable_local_oidc_contract() -> None:
+def test_local_realm_config_has_stable_oidc_contract() -> None:
     realm = load_realm()
     clients = {client["clientId"]: client for client in realm["clients"]}
 
@@ -26,7 +32,7 @@ def test_realm_import_has_stable_local_oidc_contract() -> None:
     assert realm["enabled"] is True
     assert realm["registrationAllowed"] is True
     assert realm["verifyEmail"] is False
-    assert "roles" not in realm
+    assert {"users", "roles", "groups"}.isdisjoint(realm)
     assert set(clients) == {"mic3-api", "mic3-local"}
 
     api_client = clients["mic3-api"]
@@ -65,22 +71,37 @@ def test_realm_import_has_stable_local_oidc_contract() -> None:
     ]
 
 
-def test_realm_import_has_one_non_elevated_local_identity() -> None:
-    realm = load_realm()
+def test_compose_runs_reconciliation_as_an_explicit_one_shot_tool() -> None:
+    with (ROOT / "compose.yaml").open(encoding="utf-8") as compose_file:
+        services = yaml.safe_load(compose_file)["services"]
 
-    assert realm["users"] == [
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "username": "${KEYCLOAK_DEV_USERNAME}",
-            "email": "${KEYCLOAK_DEV_EMAIL}",
-            "emailVerified": True,
-            "enabled": True,
-            "credentials": [
-                {
-                    "type": "password",
-                    "value": "${KEYCLOAK_DEV_PASSWORD}",
-                    "temporary": False,
-                }
-            ],
-        }
+    keycloak = services["keycloak"]
+    config = services["keycloak-config"]
+
+    assert keycloak["command"] == ["start-dev"]
+    assert "volumes" not in keycloak
+    assert keycloak["environment"]["KC_HOSTNAME_BACKCHANNEL_DYNAMIC"] == "true"
+    assert config["image"] == CONFIG_CLI_IMAGE
+    assert config["profiles"] == ["tools"]
+    assert config["depends_on"]["keycloak"]["condition"] == "service_healthy"
+    assert config["volumes"] == [
+        "./deploy/local/keycloak/config:/config:ro"
     ]
+
+    environment = config["environment"]
+    assert environment["KEYCLOAK_URL"] == "http://keycloak:8080"
+    assert environment["KEYCLOAK_LOGINREALM"] == "master"
+    assert environment["IMPORT_FILES_LOCATIONS"] == "file:/config/*"
+    assert environment["IMPORT_VALIDATE"] == "true"
+    assert environment["IMPORT_REMOTESTATE_ENABLED"] == "true"
+    assert environment["IMPORT_VARSUBSTITUTION_ENABLED"] == "true"
+    assert environment["LOGGING_LEVEL_ROOT"] == "INFO"
+    assert all("TRACE" not in str(value).upper() for value in environment.values())
+
+
+def test_local_environment_has_no_seeded_user_credentials() -> None:
+    environment_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "KEYCLOAK_DEV_USERNAME" not in environment_example
+    assert "KEYCLOAK_DEV_EMAIL" not in environment_example
+    assert "KEYCLOAK_DEV_PASSWORD" not in environment_example

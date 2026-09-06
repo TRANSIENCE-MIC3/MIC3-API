@@ -30,7 +30,6 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - start
-            - --import-realm
           ports:
             - name: http
               containerPort: 8080
@@ -67,6 +66,8 @@ spec:
                   name: mic3-keycloak-runtime
                   key: hostname
             - name: KC_HOSTNAME_STRICT
+              value: "true"
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
               value: "true"
             - name: KC_HTTP_ENABLED
               value: "true"
@@ -110,12 +111,4 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          volumeMounts:
-            - name: realm-import
-              mountPath: /opt/keycloak/data/import
-              readOnly: true
       terminationGracePeriodSeconds: 30
-      volumes:
-        - name: realm-import
-          configMap:
-            name: mic3-keycloak-realm

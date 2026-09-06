@@ -66,21 +66,5 @@
         }
       ]
     }
-  ],
-  "users": [
-    {
-      "id": "00000000-0000-0000-0000-000000000001",
-      "username": "${KEYCLOAK_DEV_USERNAME}",
-      "email": "${KEYCLOAK_DEV_EMAIL}",
-      "emailVerified": true,
-      "enabled": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "${KEYCLOAK_DEV_PASSWORD}",
-          "temporary": false
-        }
-      ]
-    }
   ]
 }
