@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy, LogMessageWaitStrategy
@@ -115,7 +115,7 @@ def _keycloak_stack() -> Iterator[tuple[Network, str]]:
             postgres.stop()
 
 
-def _admin_token(client: httpx.Client, base_url: str) -> str:
+def _admin_token(client: httpx2.Client, base_url: str) -> str:
     response = client.post(
         f"{base_url}/realms/master/protocol/openid-connect/token",
         data={
@@ -129,11 +129,11 @@ def _admin_token(client: httpx.Client, base_url: str) -> str:
     return str(response.json()["access_token"])
 
 
-def _admin_headers(client: httpx.Client, base_url: str) -> dict[str, str]:
+def _admin_headers(client: httpx2.Client, base_url: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {_admin_token(client, base_url)}"}
 
 
-def _realm(client: httpx.Client, base_url: str) -> dict[str, Any]:
+def _realm(client: httpx2.Client, base_url: str) -> dict[str, Any]:
     response = client.get(
         f"{base_url}/admin/realms/mic3",
         headers=_admin_headers(client, base_url),
@@ -142,7 +142,7 @@ def _realm(client: httpx.Client, base_url: str) -> dict[str, Any]:
     return response.json()
 
 
-def _clients(client: httpx.Client, base_url: str) -> dict[str, dict[str, Any]]:
+def _clients(client: httpx2.Client, base_url: str) -> dict[str, dict[str, Any]]:
     response = client.get(
         f"{base_url}/admin/realms/mic3/clients",
         headers=_admin_headers(client, base_url),
@@ -151,7 +151,7 @@ def _clients(client: httpx.Client, base_url: str) -> dict[str, dict[str, Any]]:
     return {item["clientId"]: item for item in response.json()}
 
 
-def _create_user(client: httpx.Client, base_url: str) -> None:
+def _create_user(client: httpx2.Client, base_url: str) -> None:
     response = client.post(
         f"{base_url}/admin/realms/mic3/users",
         headers=_admin_headers(client, base_url),
@@ -160,7 +160,7 @@ def _create_user(client: httpx.Client, base_url: str) -> None:
     assert response.status_code == 201, response.text
 
 
-def _usernames(client: httpx.Client, base_url: str) -> set[str]:
+def _usernames(client: httpx2.Client, base_url: str) -> set[str]:
     response = client.get(
         f"{base_url}/admin/realms/mic3/users",
         headers=_admin_headers(client, base_url),
@@ -172,7 +172,7 @@ def _usernames(client: httpx.Client, base_url: str) -> set[str]:
 def test_keycloak_26_reconciliation_is_idempotent_and_preserves_users(
     tmp_path: Path,
 ) -> None:
-    with _keycloak_stack() as (network, base_url), httpx.Client(
+    with _keycloak_stack() as (network, base_url), httpx2.Client(
         timeout=30
     ) as client:
         first_status, first_logs = _run_config_cli(network, LOCAL_REALM)
