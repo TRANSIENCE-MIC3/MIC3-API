@@ -102,14 +102,20 @@ covers the Secret, PVC, and PostgreSQL StatefulSet/ClusterIP Service. PostgreSQL
 has no public Route. The API has a Deployment, ClusterIP Service, and edge-TLS
 Route, and its private GHCR image requires the `ghcr-pull` Secret.
 
-The manifests use verified image digests and do not hard-code project IDs or
-Route hostnames. The deployed EOSC image has not yet been promoted to this
-local authentication implementation, and this change adds no EOSC Keycloak
-resources.
+The repository also contains a single-replica EOSC integration deployment for
+Keycloak 26.7.3 and its separate PostgreSQL 18 database. Both public services
+use OpenShift edge-TLS Routes; PostgreSQL and Keycloak's management port remain
+internal. The checked-in EOSC realm disables registration, email verification,
+and password reset until the production mail flow is implemented.
+
+Release `0.1.4` uses a two-commit promotion: the source/tag commit publishes the
+image, then a promotion commit pins its resulting digest in the API Deployment
+and one-shot migration Job. The migration must complete before the API is
+updated. No manifest hard-codes a namespace, Route hostname, or credential.
 
 ## Naming and versioning
 
 The application version is defined in `pyproject.toml`; release Git tags use a
-`v` prefix, for example `v0.1.3`. The distribution, API title, container image,
+`v` prefix, for example `v0.1.4`. The distribution, API title, container image,
 and Kubernetes resources use `mic3-api`; the Python import package is
 `mic3_api`. Reinstall the project after changing package metadata.

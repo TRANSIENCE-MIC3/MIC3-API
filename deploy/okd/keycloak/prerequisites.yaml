@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mic3-keycloak-postgres-data
+  labels:
+    app.kubernetes.io/name: mic3-keycloak-postgres
+spec:
+  accessModes:
+    - ReadWriteOncePod
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mic3-keycloak-postgres
+  labels:
+    app.kubernetes.io/name: mic3-keycloak-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mic3-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mic3-keycloak-postgres
+  labels:
+    app.kubernetes.io/name: mic3-keycloak-postgres
+spec:
+  serviceName: mic3-keycloak-postgres
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mic3-keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mic3-keycloak-postgres
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: quay.io/sclorg/postgresql-18-c9s@sha256:e8d01a0c455cb4a77944b0e34e8d7c5ccc6c76276025840b019ae0383573efd5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRESQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: mic3-keycloak-postgres-credentials
+                  key: database
+            - name: POSTGRESQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mic3-keycloak-postgres-credentials
+                  key: username
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mic3-keycloak-postgres-credentials
+                  key: password
+            - name: POSTGRESQL_LOG_DESTINATION
+              value: /dev/stderr
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRESQL_USER" -d "$POSTGRESQL_DATABASE"
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRESQL_USER" -d "$POSTGRESQL_DATABASE"
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/pgsql/data
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: mic3-keycloak-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mic3-keycloak
+  labels:
+    app.kubernetes.io/name: mic3-keycloak
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mic3-keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mic3-keycloak
+  labels:
+    app.kubernetes.io/name: mic3-keycloak
+spec:
+  to:
+    kind: Service
+    name: mic3-keycloak
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+

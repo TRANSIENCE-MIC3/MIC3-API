@@ -173,28 +173,227 @@ Postman exports committed to the repository.
 
 ## EOSC
 
-Not required for local development. Authenticate using EOSC's supplied login
-instructions and select the intended project before deploying.
+This is a single-replica integration deployment. MIC3 and Keycloak have
+separate PostgreSQL Services, credentials, databases, and PVCs. The API and
+Keycloak use OpenShift edge-TLS Routes backed by the cluster's trusted wildcard
+certificate, so this deployment does not need an Ingress or a custom TLS
+certificate. Neither PostgreSQL Service nor Keycloak's management port is
+public.
 
-Create these once in the EOSC console, or reuse them if they already exist:
+The EOSC realm intentionally disables public registration, email verification,
+and password reset. Create the temporary integration user through the Keycloak
+Admin Console. Mail delivery, verified registration, recovery, password policy,
+and abuse protection are a later production-hardening change.
 
-- Secret `mic3-postgres-credentials`: `database=mic3`, `username=mic3_api`,
-  and `password` with a cloud-only password.
-- PVC `mic3-postgres-data`: `ReadWriteOnce`, filesystem storage, with capacity
-  and StorageClass chosen for your project.
-- Image pull Secret `ghcr-pull`: `ghcr.io`, GitHub username, and a token
-  with `read:packages` access to the private image.
+Run the following sections in order. Commands that modify EOSC are deliberately
+manual: verify the selected project before every deployment session and stop at
+the first failure. Never delete either PostgreSQL PVC as a recovery action.
 
-From reviewed `master`, with a published, digest-pinned API image, run each
-command separately and stop if it fails:
+### 1. Preflight
 
-```text
-oc apply -f deploy/okd/postgres.yaml
-oc rollout status statefulset/mic3-postgres --timeout=180s
-oc apply -f deploy/okd/application.yaml
-oc rollout status deployment/mic3-api --timeout=180s
+Log in using EOSC's supplied `oc login` command, select the intended project,
+then confirm it and ask the API server to validate all resources without saving
+them:
+
+```powershell
+oc project -q
+oc apply --dry-run=server -f deploy/okd/keycloak/prerequisites.yaml
+oc apply --dry-run=server -k deploy/okd/keycloak
+oc apply --dry-run=server -f deploy/okd/application.yaml
+oc apply --dry-run=server -f deploy/okd/migration-0.1.4.yaml
 ```
 
-PostgreSQL stays internal-only; reuse its PVC to preserve
-data. Get the API's HTTPS URL from the `mic3-api` Route in the EOSC console and
-use it as `API_BASE_URL` for the same smoke tests above, run from your computer or CI.
+The existing one-time resources must remain available:
+
+- `mic3-postgres-credentials` for database `mic3` and user `mic3_api`;
+- `mic3-postgres-data`, preserving MIC3 application data;
+- `ghcr-pull`, with `read:packages` access to the private GHCR image.
+
+### 2. Create Keycloak Secrets once
+
+Generate two distinct URL-safe passwords in local PowerShell. Save both in a
+password manager before closing the terminal; the administrator password is
+needed for the Admin Console, while the database password must remain stable
+for the persisted Keycloak database.
+
+```powershell
+function New-UrlSafePassword {
+  param([int]$ByteCount = 32)
+  $bytes = New-Object byte[] $ByteCount
+  $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+  [Convert]::ToBase64String($bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
+}
+
+$keycloakDbPassword = New-UrlSafePassword
+$keycloakAdminPassword = New-UrlSafePassword
+
+$keycloakDbPassword | Set-Clipboard
+Read-Host "Save the Keycloak database password, then press Enter"
+$keycloakAdminPassword | Set-Clipboard
+Read-Host "Save the Keycloak administrator password, then press Enter"
+Set-Clipboard -Value ""
+
+oc create secret generic mic3-keycloak-postgres-credentials `
+  --from-literal=database="keycloak" `
+  --from-literal=username="keycloak" `
+  --from-literal=password="$keycloakDbPassword"
+
+oc create secret generic mic3-keycloak-bootstrap-admin `
+  --from-literal=username="admin" `
+  --from-literal=password="$keycloakAdminPassword"
+
+Remove-Variable keycloakDbPassword, keycloakAdminPassword
+```
+
+These deliberately use `oc create`, not an idempotent overwrite. If either
+Secret already exists, stop and inspect it instead of silently rotating a
+password that a persisted database still expects.
+
+### 3. Create prerequisites and discover the public issuer
+
+The prerequisites contain only the Keycloak PostgreSQL PVC, internal Services,
+PostgreSQL StatefulSet, and public edge-TLS Route. They do not start Keycloak.
+
+```powershell
+oc apply -f deploy/okd/keycloak/prerequisites.yaml
+oc rollout status statefulset/mic3-keycloak-postgres --timeout=180s
+
+$keycloakHost = oc get route mic3-keycloak -o jsonpath='{.spec.host}'
+$keycloakUrl = "https://$keycloakHost"
+$oidcIssuer = "$keycloakUrl/realms/mic3"
+
+oc create configmap mic3-keycloak-runtime `
+  --from-literal=hostname="$keycloakUrl"
+
+oc create secret generic mic3-oidc-config `
+  --from-literal=issuer-url="$oidcIssuer" `
+  --from-literal=audience="mic3-api"
+```
+
+The generated Route hostname is deliberately absent from Git. As with the
+credential Secrets, stop and inspect an existing runtime ConfigMap or OIDC
+Secret rather than overwriting it implicitly.
+
+### 4. Deploy and verify Keycloak
+
+```powershell
+oc apply -k deploy/okd/keycloak
+oc rollout status deployment/mic3-keycloak --timeout=300s
+oc logs deployment/mic3-keycloak --tail=150
+
+$discovery = Invoke-RestMethod "$oidcIssuer/.well-known/openid-configuration"
+if ($discovery.issuer -ne $oidcIssuer) {
+  throw "OIDC issuer mismatch: expected $oidcIssuer, got $($discovery.issuer)"
+}
+Invoke-RestMethod "$oidcIssuer/protocol/openid-connect/certs"
+```
+
+Run `Start-Process "$keycloakUrl/admin/"`, log in with the bootstrap
+administrator, select
+the `mic3` realm, and manually create a non-administrator test user. Set an
+initial non-temporary password. The realm has no Keycloak application roles,
+and its bootstrap administrator belongs to Keycloak's `master` realm rather
+than MIC3.
+
+Keycloak imports `mic3-realm.json` only when the `mic3` realm does not already
+exist. Reapplying the Deployment does not update a persisted realm. Any later
+realm change therefore needs an explicit, reviewed administrative migration;
+do not delete the Keycloak PVC to force an import.
+
+In Postman, use **Authorization Code (With PKCE)** with:
+
+| Setting | EOSC value |
+| --- | --- |
+| Callback URL | `https://oauth.pstmn.io/v1/browser-callback` |
+| Auth URL | `$oidcIssuer/protocol/openid-connect/auth` |
+| Access Token URL | `$oidcIssuer/protocol/openid-connect/token` |
+| Client ID | `mic3-postman` |
+| Client Secret | leave empty |
+| Scope | `openid profile email` |
+| Code Challenge Method | `SHA-256` |
+
+Substitute the value of `$oidcIssuer` in the two URLs. The resulting access
+token must contain a non-empty `sub`, `aud` containing `mic3-api`, and an `iss`
+exactly equal to `$oidcIssuer`.
+
+### 5. Publish and promote v0.1.4
+
+Release `0.1.4` uses two commits because an image digest does not exist before
+publication:
+
+1. Merge the reviewed source/release commit, create and push tag `v0.1.4`, and
+   wait for `.github/workflows/publish-image.yml` to pass. The workflow rejects
+   a tag that differs from `pyproject.toml` and runs all unit/integration tests.
+2. Copy the published linux/amd64 `sha256` manifest digest from GHCR. In a
+   promotion commit, set this exact reference in both
+   `deploy/okd/application.yaml` and `deploy/okd/migration-0.1.4.yaml`:
+
+```text
+ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:<published-64-character-digest>
+```
+
+Before merging the promotion, confirm the placeholder is gone and both files
+contain the same immutable image reference:
+
+```powershell
+rg "REPLACE_WITH_V0_1_4_DIGEST" deploy/okd
+rg "ghcr.io/transience-mic3/mic3-api" deploy/okd/application.yaml deploy/okd/migration-0.1.4.yaml
+python -m pytest tests/unit/infrastructure/test_okd_authentication_manifests.py
+```
+
+The first command must produce no output. Do not apply the migration or API
+manifest from the source commit while its digest marker remains.
+
+### 6. Run the database migration
+
+Run the versioned one-shot Job before changing the API Deployment:
+
+```powershell
+oc apply -f deploy/okd/migration-0.1.4.yaml
+oc wait --for=condition=complete `
+  job/mic3-api-migrate-0-1-4 `
+  --timeout=180s
+oc logs job/mic3-api-migrate-0-1-4
+```
+
+The Job receives only MIC3 database settings and runs
+`python -m alembic upgrade head`. If it fails, stop, inspect its logs, and do
+not deploy the API or downgrade the database.
+
+### 7. Deploy and verify the API
+
+```powershell
+oc apply -f deploy/okd/application.yaml
+oc rollout status deployment/mic3-api --timeout=180s
+oc logs deployment/mic3-api --tail=100
+
+$apiHost = oc get route mic3-api -o jsonpath='{.spec.host}'
+Invoke-RestMethod "https://$apiHost/health"
+Invoke-RestMethod "https://$apiHost/ready"
+```
+
+Obtain a fresh Postman access token, then exercise discovery and the real
+authenticated API path from the repository root:
+
+```powershell
+$keycloakHost = oc get route mic3-keycloak -o jsonpath='{.spec.host}'
+$oidcIssuer = "https://$keycloakHost/realms/mic3"
+$env:API_BASE_URL = "https://$apiHost"
+$env:OIDC_ISSUER_URL = $oidcIssuer
+$env:OIDC_ACCESS_TOKEN = Read-Host "Paste the access token"
+
+python -m pytest `
+  tests/smoke/test_oidc.py `
+  tests/smoke/test_authenticated_user.py
+
+Remove-Item Env:OIDC_ACCESS_TOKEN
+```
+
+Confirm MIC3 PostgreSQL now contains one application user, one external
+identity, and one `member` assignment. Keycloak remains the credential owner;
+MIC3 stores neither its password nor its token.
+
+If only the API rollout fails, use `oc rollout undo deployment/mic3-api` and
+leave the additive schema migration in place. Never recover by deleting either
+PostgreSQL PVC.
