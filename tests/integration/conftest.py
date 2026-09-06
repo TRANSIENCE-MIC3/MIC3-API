@@ -11,7 +11,7 @@ from testcontainers.community.postgres import PostgresContainer
 from mic3_api.core.config import Settings
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 POSTGRES_IMAGE = (
     "postgres:18@sha256:"
     "4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280"
@@ -23,7 +23,7 @@ TEST_PASSWORD = "test-only-password"
 
 @pytest.fixture(scope="session")
 def postgres_test_settings() -> Iterator[Settings]:
-    """Start an isolated PostgreSQL instance for schema integration tests."""
+    """Start an isolated PostgreSQL instance for integration tests."""
     with PostgresContainer(
         image=POSTGRES_IMAGE,
         username=TEST_USERNAME,
@@ -39,6 +39,8 @@ def postgres_test_settings() -> Iterator[Settings]:
             db_name=TEST_DATABASE,
             db_user=TEST_USERNAME,
             db_password=TEST_PASSWORD,
+            oidc_issuer_url="https://issuer.test/realms/mic3",
+            oidc_audience="mic3-api",
         )
 
 

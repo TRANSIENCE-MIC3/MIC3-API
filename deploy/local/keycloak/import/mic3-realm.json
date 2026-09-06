@@ -3,7 +3,7 @@
   "displayName": "MIC3",
   "enabled": true,
   "sslRequired": "external",
-  "registrationAllowed": false,
+  "registrationAllowed": true,
   "resetPasswordAllowed": false,
   "rememberMe": false,
   "verifyEmail": false,
@@ -34,7 +34,8 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:8000/docs/oauth2-redirect"
+        "http://localhost:8000/docs/oauth2-redirect",
+        "https://oauth.pstmn.io/v1/browser-callback"
       ],
       "webOrigins": [
         "http://localhost:8000"
@@ -44,6 +45,7 @@
         "post.logout.redirect.uris": "http://localhost:8000/*"
       },
       "defaultClientScopes": [
+        "basic",
         "profile",
         "email",
         "web-origins"

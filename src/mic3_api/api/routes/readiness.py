@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
 from mic3_api.api.dependencies import get_database
-from mic3_api.infrastructure.database import DatabaseGateway
+from mic3_api.infrastructure.database import DatabaseHealthGateway
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ReadinessResponse(BaseModel):
     },
 )
 def readiness(
-    database: Annotated[DatabaseGateway, Depends(get_database)],
+    database: Annotated[DatabaseHealthGateway, Depends(get_database)],
 ) -> ReadinessResponse | JSONResponse:
     """Report whether the API can reach PostgreSQL."""
     try:

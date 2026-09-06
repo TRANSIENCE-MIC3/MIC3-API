@@ -24,6 +24,8 @@ def test_realm_import_has_stable_local_oidc_contract() -> None:
 
     assert realm["realm"] == "mic3"
     assert realm["enabled"] is True
+    assert realm["registrationAllowed"] is True
+    assert realm["verifyEmail"] is False
     assert "roles" not in realm
     assert set(clients) == {"mic3-api", "mic3-local"}
 
@@ -36,6 +38,16 @@ def test_realm_import_has_stable_local_oidc_contract() -> None:
     assert local_client["standardFlowEnabled"] is True
     assert local_client["directAccessGrantsEnabled"] is False
     assert local_client["attributes"]["pkce.code.challenge.method"] == "S256"
+    assert local_client["defaultClientScopes"] == [
+        "basic",
+        "profile",
+        "email",
+        "web-origins",
+    ]
+    assert local_client["redirectUris"] == [
+        "http://localhost:8000/docs/oauth2-redirect",
+        "https://oauth.pstmn.io/v1/browser-callback",
+    ]
     assert local_client["protocolMappers"] == [
         {
             "name": "mic3-api-audience",
