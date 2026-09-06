@@ -20,5 +20,85 @@ services:
       start_period: 10s
     stop_grace_period: 30s
 
+  keycloak-postgres:
+    image: quay.io/sclorg/postgresql-18-c9s@sha256:e8d01a0c455cb4a77944b0e34e8d7c5ccc6c76276025840b019ae0383573efd5
+    environment:
+      POSTGRESQL_DATABASE: ${KEYCLOAK_DB_NAME:-keycloak}
+      POSTGRESQL_USER: ${KEYCLOAK_DB_USER:-keycloak}
+      POSTGRESQL_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD must be set in .env}
+      POSTGRESQL_LOG_DESTINATION: /dev/stderr
+    volumes:
+      - keycloak-postgres-data:/var/lib/pgsql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRESQL_USER}" -d "$${POSTGRESQL_DATABASE}"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+    command:
+      - start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KCRAW_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD must be set in .env}
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env}
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+      - "127.0.0.1:${KEYCLOAK_MANAGEMENT_PORT:-9000}:9000"
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - >-
+          { printf 'HEAD /health/ready HTTP/1.0\r\n\r\n' >&0;
+          grep 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/9000
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    mem_limit: 1g
+    stop_grace_period: 30s
+
+  keycloak-config:
+    image: quay.io/adorsys/keycloak-config-cli:6.5.1-26@sha256:1b22dfaa9ae0c71f74b0342f9221a6510f272da5def683dbba26a98e6b1b1411
+    profiles:
+      - tools
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_USER: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KEYCLOAK_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env}
+      KEYCLOAK_LOGINREALM: master
+      KEYCLOAK_AVAILABILITYCHECK_ENABLED: "true"
+      KEYCLOAK_AVAILABILITYCHECK_TIMEOUT: 120s
+      IMPORT_FILES_LOCATIONS: file:/config/*
+      IMPORT_VALIDATE: "true"
+      IMPORT_REMOTESTATE_ENABLED: "true"
+      IMPORT_VARSUBSTITUTION_ENABLED: "true"
+      IMPORT_BEHAVIORS_CHECKSUM_CHANGED: continue
+      LOGGING_LEVEL_ROOT: INFO
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - ./deploy/local/keycloak/config:/config:ro
+    mem_limit: 768m
+
 volumes:
   mic3-postgres-data:
+  keycloak-postgres-data:

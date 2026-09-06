@@ -30,6 +30,8 @@ def test_openapi_schema_contains_health_endpoints(
     monkeypatch.setenv("DB_NAME", "mic3")
     monkeypatch.setenv("DB_USER", "mic3_api")
     monkeypatch.setenv("DB_PASSWORD", "test-only-password")
+    monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.test/realms/mic3")
+    monkeypatch.setenv("OIDC_AUDIENCE", "mic3-api")
 
     with TestClient(create_app()) as client:
         response = client.get("/openapi.json")
@@ -38,5 +40,20 @@ def test_openapi_schema_contains_health_endpoints(
         assert response.status_code == 200
         assert "/health" in schema["paths"]
         assert "/ready" in schema["paths"]
+        assert "/users/me" in schema["paths"]
+        bearer_schemes = {
+            name
+            for name, security_scheme in schema["components"][
+                "securitySchemes"
+            ].items()
+            if security_scheme.get("type") == "http"
+            and security_scheme.get("scheme") == "bearer"
+        }
+        assert bearer_schemes
+        assert schema["paths"]["/users/me"]["get"]["security"] == [
+            {bearer_schemes.pop(): []}
+        ]
+        assert "security" not in schema["paths"]["/health"]["get"]
+        assert "security" not in schema["paths"]["/ready"]["get"]
         assert schema["info"]["title"] == "Integration Test API"
         assert schema["info"]["version"] == version("mic3-api")

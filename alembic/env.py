@@ -3,7 +3,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from mic3_api.core.config import Settings
+from mic3_api.core.config import DatabaseSettings
+from mic3_api.infrastructure.persistence import Base
 
 
 config = context.config
@@ -11,13 +12,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """Configure an offline migration context without opening a connection."""
     context.configure(
-        url=Settings().database_url.render_as_string(hide_password=False),
+        url=DatabaseSettings().database_url.render_as_string(hide_password=False),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -30,7 +31,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Configure an online migration context using application settings."""
     connectable = create_engine(
-        Settings().database_url,
+        DatabaseSettings().database_url,
         poolclass=pool.NullPool,
         connect_args={"connect_timeout": 3},
     )

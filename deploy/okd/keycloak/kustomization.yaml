@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - prerequisites.yaml
+  - application.yaml
+
+configMapGenerator:
+  - name: mic3-keycloak-realm
+    files:
+      - mic3-realm.json
+
+generatorOptions:
+  disableNameSuffixHash: true

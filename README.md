@@ -1,150 +1,127 @@
 # mic3-api
 
 This repository contains mic3-api, the HTTP API for the modeling platform. The
-current milestone adds PostgreSQL connectivity and database readiness while
-preserving the deployed health-only baseline. Application schema, users, and
-authentication follow in later changes.
+PostgreSQL connectivity is deployed on EOSC/OKD, and the initial user,
+external-identity, and member-role schema is managed through Alembic. The API
+provides database readiness alongside dependency-independent health checks.
+The local development path validates OIDC access tokens and provisions MIC3
+member profiles from the separate Keycloak identity provider.
+
+See the [installation and deployment guide](docs/setup-and-deployment.md) for
+local setup, tests, and EOSC deployment.
 
 ## Current endpoints
 
 - `GET /health` returns `{"status": "healthy"}`.
 - `GET /ready` checks PostgreSQL and returns `{"status": "ready"}` or a `503`
   response with `{"status": "not_ready"}`.
+- `GET /users/me` validates an OIDC bearer token and returns the active MIC3
+  profile and local roles.
 - `GET /docs` serves FastAPI's generated Swagger UI.
 - `GET /openapi.json` serves FastAPI's generated OpenAPI schema.
 
-## Local setup
+## Local quickstart
 
-The development environment uses Python 3.13 in the Conda environment named
-`transience`.
+Use Python 3.13 and a running Docker engine with Linux containers. These commands
+assume the existing Conda environment `transience` and a terminal in the
+repository root; an activated Python 3.13 venv also works.
 
 ```powershell
 conda activate transience
 python -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-`.env` is for local configuration and is excluded from Git and Docker builds.
-Environment variables override values from the file.
-
-| Variable | Default |
-| --- | --- |
-| `APP_ENV` | `development` |
-| `APP_NAME` | `mic3-api` |
-| `DB_HOST` | Required; `127.0.0.1` in `.env.example` |
-| `DB_PORT` | `5432`; local Compose uses `5433` |
-| `DB_NAME` | Required; `mic3` locally |
-| `DB_USER` | Required; `mic3_api` locally |
-| `DB_PASSWORD` | Required; use a local-only value in `.env` |
-
-The application version is defined once in `pyproject.toml`. Release Git tags
-use the same version with a `v` prefix, for example `v0.1.3`.
-
-The installed distribution, API title, container image, and Kubernetes resources
-use `mic3-api`. Python code uses the import package `mic3_api`, because hyphens
-are not valid in ordinary Python imports. Reinstall the project after changing
-package metadata so the local installation reflects it.
-
-Start the local PostgreSQL 18 dependency. Docker stores its data in the Compose
-volume `mic3-postgres-data` (normally project-prefixed by Docker); ordinary
-container removal does not remove it.
+Review `.env` and use a local-only database password, never EOSC credentials.
+The file is excluded from Git and Docker builds. If `.env` already existed,
+copy the `OIDC_*` and `KEYCLOAK_*` entries from `.env.example` and replace the
+example passwords with local-only values.
 
 ```powershell
 docker compose up -d --wait postgres
-docker compose exec postgres /bin/sh -c 'PGPASSWORD="$POSTGRESQL_PASSWORD" psql -U "$POSTGRESQL_USER" -d "$POSTGRESQL_DATABASE" -c "SELECT 1;"'
-```
-
-The container listens on port `5432`, mapped to `127.0.0.1:5433` to avoid a
-conflict with a native PostgreSQL installation. Run Alembic's non-mutating
-connectivity check and start the API from the repository root:
-
-```powershell
-python -m alembic current
-python -m uvicorn mic3_api.main:create_app --factory --host 0.0.0.0 --port 8000
+python -m alembic upgrade head
+python -m uvicorn mic3_api.main:create_app --factory --reload
 ```
 
 Then open <http://localhost:8000/health>, <http://localhost:8000/ready>, or
-<http://localhost:8000/docs>. `alembic current` creates no schema or migration
-version table when no revision exists.
+<http://localhost:8000/docs>. The command above starts only the MIC3 PostgreSQL
+service; the API runs on the host for development. PostgreSQL uses
+`127.0.0.1:5433` and a persistent named volume, independently of any native
+PostgreSQL installation.
 
-The equivalent POSIX setup commands are:
+Start the separate local Keycloak database and identity provider with:
 
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-cp .env.example .env
-docker compose up -d --wait postgres
-python -m alembic current
-python -m uvicorn mic3_api.main:create_app --factory --host 0.0.0.0 --port 8000
+```powershell
+docker compose up -d --wait keycloak
+docker compose run --rm keycloak-config
+$env:OIDC_ISSUER_URL = "http://localhost:8080/realms/mic3"
+python -m pytest tests/smoke/test_oidc.py
 ```
+
+The one-shot configuration command declaratively creates or reconciles the
+`mic3` realm after Keycloak is ready. The realm contains the `mic3-api`
+audience, a PKCE-enabled `mic3-local` browser client, and local
+self-registration. Users are operational data and are never managed by the
+reconciler. The Admin Console is at <http://localhost:8080/admin/>; the detailed
+guide explains configuration ownership and the exact Postman login settings.
 
 ## Tests
 
-Run the isolated tests without Docker or network access:
+Unit and dependency-independent health/readiness tests run without Docker or
+network access:
+
+```powershell
+python -m pytest tests/unit tests/integration/api/test_health.py tests/integration/api/test_readiness.py
+```
+
+With Docker running, execute the complete unit/integration suite. Testcontainers
+starts and removes a disposable PostgreSQL instance for schema and migration
+tests; it does not use the persistent Compose or EOSC databases.
 
 ```powershell
 python -m pytest tests/unit tests/integration
 ```
 
-The same smoke tests target a local or deployed running environment. In
-PowerShell:
+Public smoke tests target a local or deployed running API:
 
 ```powershell
 $env:API_BASE_URL = "http://localhost:8000"
-python -m pytest tests/smoke
+python -m pytest tests/smoke/test_health.py
 ```
 
-In a POSIX shell:
-
-```bash
-API_BASE_URL=http://localhost:8000 python -m pytest tests/smoke
-```
-
-## Docker
-
-`compose.yaml` runs only the local PostgreSQL dependency so the API can run and
-be debugged on the host. Build the application image separately when needed:
+With local Keycloak running, discovery and an access token copied from Postman
+exercise the real authenticated path:
 
 ```powershell
-docker build -t mic3-api:dev .
+$env:OIDC_ISSUER_URL = "http://localhost:8080/realms/mic3"
+$env:OIDC_ACCESS_TOKEN = "<temporary access token from Postman>"
+python -m pytest tests/smoke/test_oidc.py tests/smoke/test_authenticated_user.py
 ```
 
-Stopping or removing the PostgreSQL container preserves its named volume. The
-following reset is destructive and is appropriate only for disposable local
-data:
+## Deployment
 
-```powershell
-docker compose down -v
-```
+The [EOSC setup](docs/setup-and-deployment.md#eosc)
+covers the Secret, PVC, and PostgreSQL StatefulSet/ClusterIP Service. PostgreSQL
+has no public Route. The API has a Deployment, ClusterIP Service, and edge-TLS
+Route, and its private GHCR image requires the `ghcr-pull` Secret.
 
-## EOSC/OKD deployment preparation
+The repository also contains a single-replica EOSC integration deployment for
+Keycloak 26.7.3 and its separate PostgreSQL 18 database. Both public services
+use OpenShift edge-TLS Routes; PostgreSQL and Keycloak's management port remain
+internal. The checked-in EOSC realm disables registration, email verification,
+and password reset until the production mail flow is implemented. Realm
+settings and OIDC clients are applied through a repeatable, one-shot
+`keycloak-config-cli` Job after Keycloak starts; users, roles, and groups remain
+outside declarative management.
 
-`deploy/okd/postgres.yaml` defines a one-replica PostgreSQL StatefulSet and
-internal ClusterIP Service. It reuses the existing `mic3-postgres-data` PVC and
-the `mic3-postgres-credentials` Secret. PostgreSQL has no Route and is not
-publicly accessible.
+Release `0.1.4` uses a two-commit promotion: the source/tag commit publishes the
+image, then a promotion commit pins its resulting digest in the API Deployment
+and one-shot migration Job. The migration must complete before the API is
+updated. No manifest hard-codes a namespace, Route hostname, or credential.
 
-`deploy/okd/application.yaml` defines the API Deployment, ClusterIP Service, and
-edge-TLS Route. It references the private image repository
-`ghcr.io/transience-mic3/mic3-api` and requires an image-pull Secret named
-`ghcr-pull` in the target project. Create that Secret separately; never put its
-credentials in Git. The Route exposes the API without authentication.
+## Naming and versioning
 
-The manifest currently targets the pending `0.1.3` release. Do not deploy it
-until that image has been published and its verified digest has been pinned.
-
-For each release:
-
-1. Review and promote the application changes through staging to master.
-2. Create and push a Git tag matching the package version, such as `v0.1.3`.
-   The existing Publish API image workflow tests and publishes that release.
-3. Update the manifest to the published image's tag and verified digest. A
-   digest-only deployment update needs no new application version or rebuild.
-4. Review and promote the manifest update, then validate it against the selected
-   EOSC project before applying it. After deployment, run the smoke test using
-   the Route URL as `API_BASE_URL`.
-
-The manifests do not hard-code a namespace or Route hostname. For another EOSC
-project, recreate the Secrets and PVC and review resource requests/limits before
-reusing the deployment configuration.
+The application version is defined in `pyproject.toml`; release Git tags use a
+`v` prefix, for example `v0.1.4`. The distribution, API title, container image,
+and Kubernetes resources use `mic3-api`; the Python import package is
+`mic3_api`. Reinstall the project after changing package metadata.

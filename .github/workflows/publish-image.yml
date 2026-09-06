@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to publish, for example v0.1.1"
+        description: "Existing release tag to publish, for example v0.1.4"
         required: true
         type: string
 
@@ -42,8 +42,26 @@ jobs:
       - name: Check dependency compatibility
         run: python -m pip check
 
-      - name: Run integration tests
-        run: python -m pytest tests/integration
+      - name: Verify release tag matches package version
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          with open("pyproject.toml", "rb") as project_file:
+              package_version = tomllib.load(project_file)["project"]["version"]
+
+          release_tag = os.environ["RELEASE_TAG"]
+          expected_tag = f"v{package_version}"
+          if release_tag != expected_tag:
+              raise SystemExit(
+                  f"Release tag {release_tag} does not match "
+                  f"pyproject.toml version {package_version}."
+              )
+          PY
+
+      - name: Run unit and integration tests
+        run: python -m pytest tests/unit tests/integration
 
       - name: Generate image tags and labels
         id: meta

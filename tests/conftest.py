@@ -14,4 +14,6 @@ def test_settings() -> Settings:
         db_name="mic3",
         db_user="mic3_api",
         db_password="test-only-password",
+        oidc_issuer_url="https://issuer.test/realms/mic3",
+        oidc_audience="mic3-api",
     )
