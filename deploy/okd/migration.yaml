@@ -26,8 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          # REPLACE_WITH_V0_1_4_DIGEST before applying this Job.
-          image: ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:0e9d6a1d56fd222ec654bbfe816b52774c05755fc7a196481bceea24435e42d1
           imagePullPolicy: IfNotPresent
           command:
             - python
