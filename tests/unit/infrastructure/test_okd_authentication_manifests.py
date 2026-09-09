@@ -46,15 +46,45 @@ def environment_by_name(resource: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in container(resource).get("env", [])}
 
 
-def test_eosc_realm_is_closed_and_contains_no_seeded_authority() -> None:
+def test_eosc_realm_requires_verified_registration_without_seeded_authority() -> None:
     with (KEYCLOAK / "mic3-realm.json").open(encoding="utf-8") as realm_file:
         realm = json.load(realm_file)
 
     assert realm["realm"] == "mic3"
-    assert realm["registrationAllowed"] is False
-    assert realm["resetPasswordAllowed"] is False
-    assert realm["verifyEmail"] is False
+    assert realm["registrationAllowed"] is True
+    assert realm["resetPasswordAllowed"] is True
+    assert realm["verifyEmail"] is True
+    assert realm["duplicateEmailsAllowed"] is False
+    assert realm["editUsernameAllowed"] is False
+    assert "length(15)" in realm["passwordPolicy"]
+    assert realm["bruteForceProtected"] is True
+    assert realm["permanentLockout"] is False
+    assert realm["failureFactor"] == 5
+    assert realm["maxDeltaTimeSeconds"] > realm["maxFailureWaitSeconds"]
+    assert realm["attributes"][
+        "actionTokenGeneratedByUserLifespan.verify-email"
+    ] == "1800"
+    assert realm["attributes"][
+        "actionTokenGeneratedByUserLifespan.reset-credentials"
+    ] == "900"
     assert {"users", "roles", "groups"}.isdisjoint(realm)
+
+
+def test_eosc_smtp_uses_secret_substitution_and_starttls() -> None:
+    realm = json.loads((KEYCLOAK / "mic3-realm.json").read_text())
+    smtp = realm["smtpServer"]
+    for field, variable in {
+        "host": "HOST", "port": "PORT", "from": "FROM",
+        "fromDisplayName": "FROM_NAME", "user": "USER", "password": "PASSWORD",
+    }.items():
+        assert smtp[field] == f"$(env:MIC3_SMTP_{variable})"
+    assert smtp["auth"] == "true"
+    assert smtp["starttls"] == "true"
+    assert smtp["ssl"] == "false"
+    job = load_yaml_documents(KEYCLOAK / "configure.yaml")[0]
+    assert container(job)["envFrom"] == [
+        {"secretRef": {"name": "mic3-keycloak-smtp"}}
+    ]
 
 
 def test_eosc_realm_clients_have_the_required_oidc_contract() -> None:
@@ -211,14 +241,19 @@ def test_keycloak_configuration_job_is_explicit_and_restricted() -> None:
         "capabilities": {"drop": ["ALL"]},
     }
     assert env["KEYCLOAK_URL"]["value"] == "http://mic3-keycloak:8080"
-    assert env["KEYCLOAK_USER"]["valueFrom"]["secretKeyRef"]["name"] == (
-        "mic3-keycloak-bootstrap-admin"
-    )
-    assert env["KEYCLOAK_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == (
-        "mic3-keycloak-bootstrap-admin"
-    )
+    assert "KEYCLOAK_USER" not in env
+    assert "KEYCLOAK_PASSWORD" not in env
+    assert env["KEYCLOAK_GRANTTYPE"]["value"] == "client_credentials"
+    assert env["KEYCLOAK_CLIENTID"]["value"] == "mic3-realm-configurator"
+    assert env["KEYCLOAK_LOGINREALM"]["value"] == "mic3"
+    assert env["KEYCLOAK_SKIPSERVERINFO"]["value"] == "true"
+    assert env["KEYCLOAK_VERSION"]["value"] == "26.7.3"
+    assert env["KEYCLOAK_CLIENTSECRET"]["valueFrom"]["secretKeyRef"] == {
+        "name": "mic3-keycloak-reconciler", "key": "client-secret",
+    }
     assert env["IMPORT_FILES_LOCATIONS"]["value"] == "file:/config/*"
     assert env["IMPORT_VALIDATE"]["value"] == "true"
+    assert env["IMPORT_CACHE_ENABLED"]["value"] == "false"
     assert env["IMPORT_REMOTESTATE_ENABLED"]["value"] == "true"
     assert env["IMPORT_VARSUBSTITUTION_ENABLED"]["value"] == "true"
     assert env["LOGGING_LEVEL_ROOT"]["value"] == "INFO"
@@ -228,7 +263,7 @@ def test_keycloak_configuration_job_is_explicit_and_restricted() -> None:
         for entry in env.values()
         if "valueFrom" in entry
     }
-    assert secret_names == {"mic3-keycloak-bootstrap-admin"}
+    assert secret_names == {"mic3-keycloak-reconciler"}
     assert {volume["name"] for volume in pod["volumes"]} == {
         "realm-config",
         "temporary-files",

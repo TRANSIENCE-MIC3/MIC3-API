@@ -32,6 +32,9 @@ def test_local_realm_config_has_stable_oidc_contract() -> None:
     assert realm["enabled"] is True
     assert realm["registrationAllowed"] is True
     assert realm["verifyEmail"] is False
+    assert realm["resetPasswordAllowed"] is False
+    assert "smtpServer" not in realm
+    assert "$(env:MIC3_SMTP_" not in REALM_CONFIG.read_text(encoding="utf-8")
     assert {"users", "roles", "groups"}.isdisjoint(realm)
     assert set(clients) == {"mic3-api", "mic3-local"}
 

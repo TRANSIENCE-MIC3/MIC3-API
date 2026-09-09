@@ -28,21 +28,27 @@ spec:
         - name: configure
           image: quay.io/adorsys/keycloak-config-cli:6.5.1-26@sha256:1b22dfaa9ae0c71f74b0342f9221a6510f272da5def683dbba26a98e6b1b1411
           imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: mic3-keycloak-smtp
           env:
             - name: KEYCLOAK_URL
               value: http://mic3-keycloak:8080
-            - name: KEYCLOAK_USER
+            - name: KEYCLOAK_GRANTTYPE
+              value: client_credentials
+            - name: KEYCLOAK_CLIENTID
+              value: mic3-realm-configurator
+            - name: KEYCLOAK_CLIENTSECRET
               valueFrom:
                 secretKeyRef:
-                  name: mic3-keycloak-bootstrap-admin
-                  key: username
-            - name: KEYCLOAK_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: mic3-keycloak-bootstrap-admin
-                  key: password
+                  name: mic3-keycloak-reconciler
+                  key: client-secret
             - name: KEYCLOAK_LOGINREALM
-              value: master
+              value: mic3
+            - name: KEYCLOAK_SKIPSERVERINFO
+              value: "true"
+            - name: KEYCLOAK_VERSION
+              value: "26.7.3"
             - name: KEYCLOAK_AVAILABILITYCHECK_ENABLED
               value: "true"
             - name: KEYCLOAK_AVAILABILITYCHECK_TIMEOUT
@@ -51,6 +57,8 @@ spec:
               value: file:/config/*
             - name: IMPORT_VALIDATE
               value: "true"
+            - name: IMPORT_CACHE_ENABLED
+              value: "false"
             - name: IMPORT_REMOTESTATE_ENABLED
               value: "true"
             - name: IMPORT_VARSUBSTITUTION_ENABLED

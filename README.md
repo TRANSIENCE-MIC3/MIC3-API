@@ -108,8 +108,11 @@ Route, and its private GHCR image requires the `ghcr-pull` Secret.
 The repository also contains a single-replica EOSC integration deployment for
 Keycloak 26.7.3 and its separate PostgreSQL 18 database. Both public services
 use OpenShift edge-TLS Routes; PostgreSQL and Keycloak's management port remain
-internal. The checked-in EOSC realm disables registration, email verification,
-and password reset until the production mail flow is implemented. Realm
+internal. The checked-in EOSC realm enables registration with email verification,
+password recovery, password policy, and temporary brute-force lockout. SMTP is
+supplied to the configuration Job by an EOSC Secret; local Compose needs no SMTP.
+The EOSC Job requires a pre-provisioned realm administration service account and
+its client-secret Secret. Realm
 settings and OIDC clients are applied through a repeatable, one-shot
 `keycloak-config-cli` Job after Keycloak starts; users, roles, and groups remain
 outside declarative management.
