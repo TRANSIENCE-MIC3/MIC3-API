@@ -1,0 +1,57 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mic3-custom-domains
+parameters:
+  - name: API_HOST
+    description: Public API hostname covered by mic3-api-production-tls.
+    required: true
+  - name: AUTH_HOST
+    description: Public authentication hostname covered by mic3-auth-production-tls.
+    required: true
+objects:
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: mic3-api-custom
+      annotations:
+        route.openshift.io/termination: edge
+    spec:
+      # Retain the default Ingress handling proven by HTTP-01 validation.
+      tls:
+        - hosts:
+            - ${API_HOST}
+          secretName: mic3-api-production-tls
+      rules:
+        - host: ${API_HOST}
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: mic3-api
+                    port:
+                      name: http
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: mic3-auth-custom
+      annotations:
+        route.openshift.io/termination: edge
+    spec:
+      tls:
+        - hosts:
+            - ${AUTH_HOST}
+          secretName: mic3-auth-production-tls
+      rules:
+        - host: ${AUTH_HOST}
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: mic3-keycloak
+                    port:
+                      name: http

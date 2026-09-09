@@ -1,0 +1,71 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mic3-certificates-production
+parameters:
+  - name: ACME_EMAIL
+    description: Contact email for the Let's Encrypt production account.
+    required: true
+  - name: API_HOST
+    description: Public API DNS hostname, without scheme or path.
+    required: true
+  - name: AUTH_HOST
+    description: Public authentication DNS hostname, without scheme or path.
+    required: true
+objects:
+  - apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      name: mic3-letsencrypt-production
+    spec:
+      acme:
+        email: ${ACME_EMAIL}
+        server: https://acme-v02.api.letsencrypt.org/directory
+        privateKeySecretRef:
+          name: mic3-letsencrypt-production-account
+        solvers:
+          - http01:
+              ingress:
+                # Use the default Ingress handling validated with the staging template.
+                serviceType: ClusterIP
+                podTemplate:
+                  spec:
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                      limits:
+                        cpu: 100m
+                        memory: 128Mi
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: mic3-api-production
+    spec:
+      secretName: mic3-api-production-tls
+      dnsNames:
+        - ${API_HOST}
+      privateKey:
+        algorithm: RSA
+        size: 2048
+        rotationPolicy: Always
+      issuerRef:
+        name: mic3-letsencrypt-production
+        kind: Issuer
+        group: cert-manager.io
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: mic3-auth-production
+    spec:
+      secretName: mic3-auth-production-tls
+      dnsNames:
+        - ${AUTH_HOST}
+      privateKey:
+        algorithm: RSA
+        size: 2048
+        rotationPolicy: Always
+      issuerRef:
+        name: mic3-letsencrypt-production
+        kind: Issuer
+        group: cert-manager.io

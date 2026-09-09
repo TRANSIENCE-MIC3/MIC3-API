@@ -189,10 +189,11 @@ certificate, so this deployment does not need an Ingress or a custom TLS
 certificate. Neither PostgreSQL Service nor Keycloak's management port is
 public.
 
-The EOSC realm intentionally disables public registration, email verification,
-and password reset. Create the temporary integration user through the Keycloak
-Admin Console. Mail delivery, verified registration, recovery, password policy,
-and abuse protection are a later production-hardening change.
+The EOSC realm enables registration with verified email, password recovery,
+a 15-character password minimum, and temporary brute-force lockout. SMTP is
+loaded from the `mic3-keycloak-smtp` Secret by the reconciliation Job. Local
+Compose remains independent of SMTP. Registration/email request throttling and
+bot protection still need assessment before public launch.
 
 Run the following sections in order. Commands that modify EOSC are deliberately
 manual: verify the selected project before every deployment session and stop at
@@ -287,6 +288,30 @@ Secret rather than overwriting it implicitly.
 
 ### 4. Deploy, configure, and verify Keycloak
 
+The configuration Job now authenticates with a service account in the existing
+`mic3` realm, not the temporary master administrator. Before running it, ensure:
+
+- The `mic3` realm exists. On a fresh installation, start Keycloak with the
+  deployment commands below, then create the realm in the Admin Console first.
+- In `mic3`, create the confidential client `mic3-realm-configurator`, enable
+  service accounts, disable browser/direct-grant flows, and assign its service
+  account the `realm-management` client role `realm-admin`. Keep this operational
+  client outside the realm JSON; remote-state management preserves unmanaged
+  clients. Normal users must never receive this role.
+- Create the Opaque Secret `mic3-keycloak-reconciler` with key `client-secret`
+  containing that client's credential.
+- Create the Opaque Secret `mic3-keycloak-smtp` with keys `MIC3_SMTP_HOST`,
+  `MIC3_SMTP_PORT`, `MIC3_SMTP_FROM`, `MIC3_SMTP_FROM_NAME`, `MIC3_SMTP_USER`, and
+  `MIC3_SMTP_PASSWORD`. Use the Brevo SMTP login and SMTP key. The example `.env`
+  is for local development and does not supply these EOSC values.
+
+The Job uses `http://mic3-keycloak:8080`, the internal Service address. It does
+not change Keycloak's configured public hostname or the API's trusted issuer.
+It skips the master-only server-info endpoint, supplies the pinned server
+version, and disables the import cache so each explicit run reconciles settings.
+No image build is needed. Server-side dry-run does not verify client credentials
+or Secret existence; those are checked when the Job actually runs.
+
 ```powershell
 oc apply -k deploy/okd/keycloak
 oc rollout status deployment/mic3-keycloak --timeout=300s
@@ -305,25 +330,37 @@ Invoke-RestMethod "$oidcIssuer/protocol/openid-connect/certs"
 
 Keycloak starts independently of realm configuration. The generated
 configuration Job runs the pinned `keycloak-config-cli` image, waits for the
-internal Keycloak Service, and then creates or reconciles the `mic3` realm
+internal Keycloak Service, and then reconciles the pre-created `mic3` realm
 through the Admin API. A non-zero Job result is a deployment blocker: inspect
 its logs and do not proceed to the API release. Completed configuration Jobs
 are automatically removed after one day.
 
-Run `Start-Process "$keycloakUrl/admin/"`, log in with the bootstrap
-administrator, select
-the `mic3` realm, and manually create a non-administrator test user. Set an
-initial non-temporary password. The realm has no Keycloak application roles,
-and its bootstrap administrator belongs to Keycloak's `master` realm rather
-than MIC3.
+Log into the Admin Console with your permanent master administrator and verify
+the `mic3` realm settings. Test registration and email verification, password
+recovery, and authenticated `/users/me` through the existing Postman PKCE client.
+Keycloak administrator privileges are separate from MIC3 application roles.
+Keep the temporary administrator until permanent login and service-account
+reconciliation both work. The deployment still references the bootstrap Secret;
+remove those deployment references before retiring that Secret.
 
 Realm settings, the `mic3-api` and `mic3-postman` clients, client scopes, and
 protocol mappers declared in `mic3-realm.json` are authoritative. Users, roles,
 and groups are deliberately omitted, so reconciliation does not manage or
 delete them. Manual Admin Console changes to managed resources can be restored
 on the next run. After experimenting, record accepted changes in the JSON,
-review them, update the ConfigMap with `oc apply -k deploy/okd/keycloak`, and run
-a new generated configuration Job using the commands above. Do not delete the
+review them, update only the realm ConfigMap, and run a new generated
+configuration Job. For an existing deployment, use:
+
+```powershell
+oc create configmap mic3-keycloak-realm --from-file=mic3-realm.json=deploy/okd/keycloak/mic3-realm.json --dry-run=client -o yaml | oc apply --dry-run=server -f -
+oc create configmap mic3-keycloak-realm --from-file=mic3-realm.json=deploy/okd/keycloak/mic3-realm.json --dry-run=client -o yaml | oc apply -f -
+$configJob = oc create -f deploy/okd/keycloak/configure.yaml -o name
+oc wait --for=condition=complete $configJob --timeout=300s
+oc logs $configJob
+```
+
+Stop at a failure. Repeat the Job and functional checks to verify reconciliation
+preserves users, policy, and mail delivery. Do not delete the
 realm or Keycloak PVC to apply a change.
 
 In Postman, use **Authorization Code (With PKCE)** with:
@@ -422,3 +459,290 @@ MIC3 stores neither its password nor its token.
 If only the API rollout fails, use `oc rollout undo deployment/mic3-api` and
 leave the additive schema migration in place. Never recover by deleting either
 PostgreSQL PVC.
+
+### 8. Validate custom-domain certificates with Let's Encrypt staging
+
+This is an optional, separately applied certificate experiment. It requires
+cert-manager already installed on the cluster and permission to create namespaced
+Issuers, Certificates, and Ingresses. It does not require a new API image.
+The existing application manifests do not include this template.
+
+Let's Encrypt **staging** is a test certificate authority, not another EOSC
+namespace or the Git branch. Its certificates are not trusted by browsers.
+Never attach these test Secrets to the API or Keycloak Routes. Production
+issuance and automatic delivery of renewed certificates to Routes are a later
+step with separate resource and Secret names; do not change this Issuer's server
+to the production endpoint.
+
+The template requests one certificate per hostname using HTTP-01. The hostnames
+must already resolve to the cluster's public ingress, which must serve the
+temporary validation path on port 80. cert-manager creates temporary solver
+Pods, ClusterIP Services, and Ingresses. No ingress class is specified: this
+experiment establishes whether the platform's default handling admits and
+serves them. An Issuer becoming Ready only confirms ACME account registration;
+both Certificates must become Ready to prove domain validation.
+
+#### Select the project and render in memory
+
+Run from the repository root in PowerShell after `oc login`. Enter bare DNS
+hostnames, without `https://` or paths. The contact email is for the ACME account,
+not an SMTP login. All three parameters are required.
+
+```powershell
+oc project -q
+$certificateProject = Read-Host "Confirm the intended EOSC project name"
+if ($certificateProject -ne (oc project -q)) {
+  throw "Selected project does not match; select the intended project first"
+}
+$certificateEmail = Read-Host "ACME contact email"
+$certificateApiHost = Read-Host "API custom hostname"
+$certificateAuthHost = Read-Host "Authentication custom hostname"
+
+$certificateManifest = oc process --local `
+  -f deploy/okd/certificates/staging-template.yaml `
+  -p "ACME_EMAIL=$certificateEmail" `
+  -p "API_HOST=$certificateApiHost" `
+  -p "AUTH_HOST=$certificateAuthHost" -o json
+if ($LASTEXITCODE -ne 0) { throw "Certificate template rendering failed" }
+$certificateManifest
+```
+
+Inspect the three resources and their hostnames. Keep the rendered configuration
+in memory; do not commit environment-specific manifests or Secret exports.
+Namespace selection is explicit on every cluster command below.
+
+#### Validate, then apply manually
+
+First ask the API server to validate without saving resources:
+
+```powershell
+$certificateManifest | oc -n $certificateProject apply --dry-run=server -f -
+if ($LASTEXITCODE -ne 0) { throw "Certificate dry-run failed; do not apply" }
+```
+
+Dry-run does not prove the cert-manager controller can solve challenges. When
+ready to start the experiment, apply exactly the reviewed resources:
+
+```powershell
+$certificateManifest | oc -n $certificateProject apply -f -
+if ($LASTEXITCODE -ne 0) { throw "Certificate apply failed; inspect before retrying" }
+oc -n $certificateProject get issuer mic3-letsencrypt-staging
+oc -n $certificateProject get certificate mic3-api-staging mic3-auth-staging
+```
+
+#### Inspect issuance and failures
+
+Use these read-only checks; issuance can take several minutes. If pending,
+inspect the reported reason rather than repeatedly creating new requests.
+
+```powershell
+oc -n $certificateProject describe issuer mic3-letsencrypt-staging
+oc -n $certificateProject describe certificate mic3-api-staging mic3-auth-staging
+oc -n $certificateProject get certificaterequests,orders.acme.cert-manager.io,challenges.acme.cert-manager.io
+oc -n $certificateProject get pods,services,ingresses -l acme.cert-manager.io/http01-solver=true
+oc -n $certificateProject get routes
+oc -n $certificateProject get events --sort-by=.metadata.creationTimestamp
+```
+
+For a failed resource, use `oc -n $certificateProject describe <kind> <name>`
+with the exact name from the listing. Follow owner references from the
+CertificateRequest to its Certificate and from Orders/Challenges to the request
+before attributing failures. Check pod scheduling/resource limits, solver logs,
+generated Ingress/Route admission, and external HTTP challenge reachability.
+Do not install controllers, broaden permissions, or switch validation methods
+without reviewing a revised plan. Stop if existing application health regresses.
+
+#### Verify the certificate without exposing private keys
+
+Both Certificates must report `Ready=True`. Inspect status and only the public
+`tls.crt` field of each Secret (never print the whole Secret or `tls.key`):
+
+```powershell
+oc -n $certificateProject get certificate mic3-api-staging mic3-auth-staging `
+  -o custom-columns='NAME:.metadata.name,DNS:.spec.dnsNames,READY:.status.conditions[?(@.type=="Ready")].status,NOT_BEFORE:.status.notBefore,NOT_AFTER:.status.notAfter,RENEWAL:.status.renewalTime'
+
+foreach ($certificateSecret in @('mic3-api-staging-tls', 'mic3-auth-staging-tls')) {
+  $certificateBase64 = oc -n $certificateProject get secret $certificateSecret `
+    -o jsonpath='{.data.tls\.crt}'
+  if ($LASTEXITCODE -ne 0) { throw "Cannot read public certificate" }
+  $certificatePem = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String($certificateBase64)
+  )
+  $certificateMatch = [regex]::Match(
+    $certificatePem, '(?s)-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----'
+  )
+  if (-not $certificateMatch.Success) { throw "Missing PEM certificate" }
+  $certificateDer = [Convert]::FromBase64String($certificateMatch.Groups[1].Value)
+  $publicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateDer)
+  try {
+    $publicCertificate | Select-Object Subject, Issuer, NotBefore, NotAfter, Thumbprint
+    $publicCertificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } |
+      ForEach-Object { $_.Format($true) }
+  } finally { $publicCertificate.Dispose() }
+}
+```
+
+Confirm each public certificate's subject alternative name matches its requested
+hostname, its validity contains the current time, and its issuer is a Let's
+Encrypt staging issuer. `renewalTime` demonstrates a scheduled renewal, not an
+observed successful renewal. These Secrets are not yet connected to any Route.
+
+Check the original application endpoints with normal HTTPS verification:
+
+```powershell
+$originalApiHost = oc -n $certificateProject get route mic3-api -o jsonpath='{.spec.host}'
+$originalAuthHost = oc -n $certificateProject get route mic3-keycloak -o jsonpath='{.spec.host}'
+Invoke-RestMethod "https://$originalApiHost/health"
+Invoke-RestMethod "https://$originalApiHost/ready"
+$originalDiscovery = Invoke-RestMethod "https://$originalAuthHost/realms/mic3/.well-known/openid-configuration"
+if ($originalDiscovery.issuer -ne "https://$originalAuthHost/realms/mic3") {
+  throw "Unexpected change to the original OIDC issuer"
+}
+```
+
+Record the results before planning production issuance. This experiment does not
+change Keycloak's hostname, the API's trusted issuer, or application user mappings.
+
+#### Retire the experiment
+
+When no longer needed, remove only these test resources. Deleting Certificates
+allows their owned requests and challenges to be garbage-collected; certificate
+Secrets may remain depending on controller settings, so they are named explicitly.
+Do not use a namespace-wide or broad label-based delete.
+
+```powershell
+oc -n $certificateProject delete certificate mic3-api-staging mic3-auth-staging --ignore-not-found
+if ($LASTEXITCODE -ne 0) { throw "Certificate cleanup failed" }
+oc -n $certificateProject delete issuer mic3-letsencrypt-staging --ignore-not-found
+if ($LASTEXITCODE -ne 0) { throw "Issuer cleanup failed" }
+oc -n $certificateProject delete secret mic3-api-staging-tls mic3-auth-staging-tls mic3-letsencrypt-staging-account --ignore-not-found
+```
+
+If solver resources remain, inspect their owner references and deletion events
+before acting. Keep production resources, existing Routes, and database PVCs intact.
+
+### 9. Request production certificates
+
+Use this after both staging certificates have been issued and inspected. Keep
+the staging template in Git as a repeatable infrastructure test; its live
+resources can be retired using the cleanup above after production succeeds.
+The production template is independent and does not modify staging resources.
+
+1. In the same PowerShell window, confirm `$certificateProject`,
+   `$certificateEmail`, `$certificateApiHost`, and `$certificateAuthHost` still
+   contain the intended values. If starting a new window, use the project and
+   parameter prompts from section 8 first. Confirm `oc project -q` matches
+   `$certificateProject`.
+2. Render the production configuration in memory:
+
+```powershell
+$productionCertificateManifest = oc process --local -f deploy/okd/certificates/production-template.yaml -p "ACME_EMAIL=$certificateEmail" -p "API_HOST=$certificateApiHost" -p "AUTH_HOST=$certificateAuthHost" -o json
+if ($LASTEXITCODE -ne 0) { throw "Production rendering failed" }
+$productionCertificateManifest
+```
+
+3. Validate without saving anything:
+
+```powershell
+$productionCertificateManifest | oc -n $certificateProject apply --dry-run=server -f -
+if ($LASTEXITCODE -ne 0) { throw "Production dry-run failed; do not apply" }
+```
+
+4. Apply only after reviewing the hostnames and the production ACME endpoint:
+
+```powershell
+$productionCertificateManifest | oc -n $certificateProject apply -f -
+if ($LASTEXITCODE -ne 0) { throw "Production apply failed" }
+oc -n $certificateProject get issuer mic3-letsencrypt-production
+oc -n $certificateProject get certificate mic3-api-production mic3-auth-production
+```
+
+There are **no Secrets to create manually**. cert-manager generates:
+
+| Secret | Contents |
+| --- | --- |
+| `mic3-letsencrypt-production-account` | Production ACME account private key |
+| `mic3-api-production-tls` | API certificate chain and private key |
+| `mic3-auth-production-tls` | Authentication certificate chain and private key |
+
+Do not copy staging keys or certificates into these Secrets. Keep generated
+Secrets out of Git. No DNS-provider credentials or SMTP credentials are involved.
+
+5. Require the Issuer and both Certificates to report `Ready=True`. Use the
+   section 8 diagnostics if pending, replacing the three resource names with
+   their production names. Do not repeatedly delete/recreate production requests
+   to troubleshoot; production issuance is subject to CA rate limits.
+6. Repeat the public-certificate inspection from section 8 with Secret names
+   `mic3-api-production-tls` and `mic3-auth-production-tls`. Confirm the requested
+   DNS names, current validity, and a production rather than staging issuer.
+   Inspect `status.renewalTime` on each production Certificate. Recheck the
+   original health, readiness, and OIDC discovery endpoints.
+
+Issuance alone does not enable HTTPS at the custom hostnames. A separate change
+must connect these Secrets to the public Routes and ensure renewed certificates
+are served automatically, then coordinate the Keycloak/API issuer transition.
+No application Route, Deployment, or OIDC configuration is changed by this
+template. Do not retire the production Issuer or Certificates after issuance:
+cert-manager needs them to manage renewal.
+
+### 10. Connect the custom hostnames to production certificates
+
+Apply this only after both production Certificates are Ready. The separate
+`deploy/okd/custom-domains-template.yaml` creates two standard Ingresses. OKD
+creates owned Routes from them, using the referenced TLS Secrets. Its
+Ingress-to-Route controller watches Secret updates and updates the generated
+Routes when cert-manager renews certificates. No extra controller or router
+RBAC is installed. Keep generated Routes and their certificate/key contents out
+of Git; edit the parent Ingress configuration rather than its generated Routes.
+
+The existing cloud-hostname Routes remain available and continue to provide the
+DNS alias targets. This step does not restart applications or change OIDC settings.
+
+Use the same project and hostname variables from the certificate steps:
+
+```powershell
+if ([string]::IsNullOrWhiteSpace($certificateProject) -or $certificateProject -ne (oc project -q)) { throw "Confirm the intended project first" }
+$customDomainManifest = oc process --local -f deploy/okd/custom-domains-template.yaml -p "API_HOST=$certificateApiHost" -p "AUTH_HOST=$certificateAuthHost" -o json
+if ($LASTEXITCODE -ne 0) { throw "Custom domain rendering failed" }
+$customDomainManifest
+$customDomainManifest | oc -n $certificateProject apply --dry-run=server -f -
+if ($LASTEXITCODE -ne 0) { throw "Custom domain validation failed" }
+```
+
+After reviewing the render and successful dry-run, apply manually:
+
+```powershell
+$customDomainManifest | oc -n $certificateProject apply -f -
+if ($LASTEXITCODE -ne 0) { throw "Custom domain apply failed" }
+oc -n $certificateProject get ingress mic3-api-custom mic3-auth-custom
+oc -n $certificateProject get routes
+Invoke-RestMethod "https://$certificateApiHost/health"
+Invoke-RestMethod "https://$certificateApiHost/ready"
+$customDiscovery = Invoke-RestMethod "https://$certificateAuthHost/realms/mic3/.well-known/openid-configuration"
+$customDiscovery.issuer
+```
+
+Require HTTPS validation to succeed without bypass flags. Check the generated
+Routes are Admitted, use edge TLS, and redirect insecure traffic (the controller's
+default for newly generated TLS Routes). Verify each served public certificate
+matches the corresponding production Secret's public certificate, and recheck
+the original cloud endpoints. Do not print whole generated Route YAML: it can
+contain private keys copied by the controller.
+
+Keycloak discovery will still advertise the original cloud issuer at this stage;
+login pages may link or redirect there. The next step is a coordinated hostname
+and trusted-issuer change with explicit handling of existing MIC3 issuer/subject
+mappings. Neither frontend CORS nor email configuration is part of this template.
+
+Secret update propagation uses OKD's existing controller, but an observed
+production renewal remains a later check. Do not force repeated production
+issuance just to test it. After renewal, compare the served public certificate
+with the renewed Secret and confirm HTTPS remains valid.
+
+To roll back only this routing step, delete the two parent Ingresses; their
+owned Routes are garbage-collected. Preserve the original Routes and production
+Certificates/Secrets:
+
+```powershell
+oc -n $certificateProject delete ingress mic3-api-custom mic3-auth-custom --ignore-not-found
+```
