@@ -1,0 +1,59 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mic3-deployment-bootstrap
+parameters:
+  - name: NAMESPACE
+    required: true
+objects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: mic3-github-deployer
+    automountServiceAccountToken: false
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: mic3-api-runtime
+    automountServiceAccountToken: false
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: mic3-api-migration
+    automountServiceAccountToken: false
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: mic3-github-deployer
+    rules:
+      - apiGroups: [apps]
+        resources: [deployments]
+        resourceNames: [mic3-api]
+        verbs: [get, list, watch, patch, update]
+      - apiGroups: [apps]
+        resources: [replicasets]
+        verbs: [get, list, watch]
+      - apiGroups: [batch]
+        resources: [jobs]
+        verbs: [get, list, watch, create, delete]
+      - apiGroups: ['']
+        resources: [pods]
+        verbs: [get, list, watch]
+      - apiGroups: ['']
+        resources: [pods/log]
+        verbs: [get]
+      - apiGroups: ['']
+        resources: [events]
+        verbs: [get, list]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: mic3-github-deployer
+    subjects:
+      - kind: ServiceAccount
+        name: mic3-github-deployer
+        namespace: ${NAMESPACE}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: mic3-github-deployer

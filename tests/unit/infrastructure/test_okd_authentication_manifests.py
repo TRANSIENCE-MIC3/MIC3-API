@@ -13,10 +13,6 @@ ROOT = Path(__file__).resolve().parents[3]
 OKD = ROOT / "deploy" / "okd"
 KEYCLOAK = OKD / "keycloak"
 DIGEST_IMAGE = re.compile(r"^[^\s]+@sha256:[0-9a-f]{64}$")
-PENDING_RELEASE_IMAGE = (
-    "ghcr.io/transience-mic3/mic3-api:0.1.4"
-    "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-)
 CONFIG_CLI_IMAGE = (
     "quay.io/adorsys/keycloak-config-cli:6.5.1-26@sha256:"
     "1b22dfaa9ae0c71f74b0342f9221a6510f272da5def683dbba26a98e6b1b1411"
@@ -25,7 +21,13 @@ CONFIG_CLI_IMAGE = (
 
 def load_yaml_documents(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as manifest:
-        return [document for document in yaml.safe_load_all(manifest) if document]
+        resources = []
+        for document in yaml.safe_load_all(manifest):
+            if document:
+                resources.extend(
+                    document["objects"] if document["kind"] == "Template" else [document]
+                )
+        return resources
 
 
 def find_resource(
@@ -276,7 +278,7 @@ def test_keycloak_configuration_job_is_explicit_and_restricted() -> None:
 
 def test_api_receives_oidc_settings_from_the_dedicated_secret() -> None:
     deployment = find_resource(
-        load_yaml_documents(OKD / "application.yaml"), "Deployment", "mic3-api"
+        load_yaml_documents(OKD / "application-template.yaml"), "Deployment", "mic3-api"
     )
     env = environment_by_name(deployment)
 
@@ -291,13 +293,14 @@ def test_api_receives_oidc_settings_from_the_dedicated_secret() -> None:
 
 
 def test_migration_job_runs_only_alembic_with_mic3_database_settings() -> None:
-    job = find_resource(
-        load_yaml_documents(OKD / "migration.yaml"),
-        "Job",
-        "mic3-api-migrate-0-1-4",
-    )
+    job = load_yaml_documents(OKD / "migration-template.yaml")[0]
     migration = container(job)
     env = environment_by_name(job)
+    assert "name" not in job["metadata"]
+    assert job["metadata"]["generateName"] == "mic3-api-migrate-"
+    assert job["spec"]["activeDeadlineSeconds"] == 600
+    assert job["spec"]["ttlSecondsAfterFinished"] == 86400
+    assert job["spec"]["backoffLimit"] == 0
 
     assert migration["command"] == [
         "python",
@@ -314,36 +317,41 @@ def test_migration_job_runs_only_alembic_with_mic3_database_settings() -> None:
     } == {"mic3-postgres-credentials"}
 
 
-def test_release_image_promotion_is_explicit_and_updates_both_workloads() -> None:
-    api = find_resource(
-        load_yaml_documents(OKD / "application.yaml"), "Deployment", "mic3-api"
-    )
-    migration = find_resource(
-        load_yaml_documents(OKD / "migration.yaml"),
-        "Job",
-        "mic3-api-migrate-0-1-4",
-    )
-    api_image = container(api)["image"]
-    migration_image = container(migration)["image"]
-
-    if migration_image == PENDING_RELEASE_IMAGE:
-        # The source/release commit deliberately retains the deployed API and
-        # cannot invent the v0.1.4 digest. Promotion must replace both values.
-        assert DIGEST_IMAGE.fullmatch(api_image)
-        assert ":0.1.3@sha256:" in api_image
-    else:
-        assert api_image == migration_image
-        assert api_image.startswith(
-            "ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:"
-        )
-        assert DIGEST_IMAGE.fullmatch(api_image)
+def test_release_workloads_share_the_image_parameter() -> None:
+    api = load_yaml_documents(OKD / "application-template.yaml")[0]
+    migration = load_yaml_documents(OKD / "migration-template.yaml")[0]
+    assert container(api)["image"] == container(migration)["image"] == "${IMAGE_REF}"
+    for name, resource, account in (
+        ("application", api, "mic3-api-runtime"),
+        ("migration", migration, "mic3-api-migration"),
+    ):
+        template = yaml.safe_load((OKD / f"{name}-template.yaml").read_text(encoding="utf-8"))
+        assert {p["name"] for p in template["parameters"] if p.get("required")} == {
+            "IMAGE_REF", "RELEASE_VERSION", "SOURCE_COMMIT",
+        }
+        assert resource["metadata"]["annotations"] == {
+            "delivery.mic3.io/version": "${RELEASE_VERSION}",
+            "delivery.mic3.io/image": "${IMAGE_REF}",
+            "delivery.mic3.io/commit": "${SOURCE_COMMIT}",
+        }
+        assert resource["spec"]["template"]["metadata"]["annotations"] == resource["metadata"]["annotations"]
+        pod = resource["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == account
+        assert pod["automountServiceAccountToken"] is False
+    service = find_resource(load_yaml_documents(OKD / "networking.yaml"), "Service", "mic3-api")
+    selector = service["spec"]["selector"].items()
+    assert selector <= api["spec"]["template"]["metadata"]["labels"].items()
+    assert not selector <= migration["spec"]["template"]["metadata"]["labels"].items()
+    assert api["spec"]["selector"]["matchLabels"] == {"app.kubernetes.io/name": "mic3-api"}
 
 
 def test_manifests_do_not_commit_cluster_specific_or_secret_resources() -> None:
     paths = [
-        OKD / "application.yaml",
+        OKD / "application-template.yaml",
         OKD / "postgres.yaml",
-        OKD / "migration.yaml",
+        OKD / "migration-template.yaml",
+        OKD / "networking.yaml",
+        OKD / "deployer-template.yaml",
         KEYCLOAK / "prerequisites.yaml",
         KEYCLOAK / "application.yaml",
         KEYCLOAK / "configure.yaml",
@@ -364,7 +372,6 @@ def test_release_version_and_publish_workflow_are_consistent() -> None:
         encoding="utf-8"
     )
 
-    assert version == "0.1.4"
-    assert 'release_tag = os.environ["RELEASE_TAG"]' in workflow
-    assert 'expected_tag = f"v{package_version}"' in workflow
+    assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    assert '[[ "$RELEASE_TAG" == "v$version" ]]' in workflow
     assert "python -m pytest tests/unit tests/integration" in workflow

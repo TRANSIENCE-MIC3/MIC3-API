@@ -210,8 +210,8 @@ oc project -q
 oc apply --dry-run=server -f deploy/okd/keycloak/prerequisites.yaml
 oc apply --dry-run=server -k deploy/okd/keycloak
 oc create --dry-run=server -f deploy/okd/keycloak/configure.yaml -o yaml | Out-Null
-oc apply --dry-run=server -f deploy/okd/application.yaml
-oc apply --dry-run=server -f deploy/okd/migration.yaml
+oc apply --dry-run=server -f deploy/okd/networking.yaml
+# Release templates are rendered and dry-run by the release workflow.
 ```
 
 The existing one-time resources must remain available:
@@ -379,86 +379,79 @@ Substitute the value of `$oidcIssuer` in the two URLs. The resulting access
 token must contain a non-empty `sub`, `aud` containing `mic3-api`, and an `iss`
 exactly equal to `$oidcIssuer`.
 
-### 5. Publish and promote v0.1.4
+### 5. Release the API
 
-Release `0.1.4` uses two commits because an image digest does not exist before
-publication:
+1. Set the next unused stable version in `pyproject.toml` before committing.
+2. Push reviewed changes to `staging` and merge into `master`.
+3. Update local `master`, tag that commit, and push the tag. For example:
 
-1. Merge the reviewed source/release commit, create and push tag `v0.1.4`, and
-   wait for `.github/workflows/publish-image.yml` to pass. The workflow rejects
-   a tag that differs from `pyproject.toml` and runs all unit/integration tests.
-2. Copy the published linux/amd64 `sha256` manifest digest from GHCR. In a
-   promotion commit, set this exact reference in both
-   `deploy/okd/application.yaml` and `deploy/okd/migration.yaml`:
+   ```powershell
+   git switch master
+   git pull --ff-only origin master
+   git tag v0.1.5
+   git push origin v0.1.5
+   ```
 
-```text
-ghcr.io/transience-mic3/mic3-api:0.1.4@sha256:<published-64-character-digest>
-```
+4. Watch **Actions → Release and deploy API**. It tests and publishes the image,
+   saves `release.json` on the GitHub Release, runs Alembic, and updates the API
+   only after migration succeeds. It then waits for rollout and checks endpoints.
 
-Before merging the promotion, confirm the placeholder is gone and both files
-contain the same immutable image reference:
+The `eosc-development` GitHub environment supplies the deployment token, server,
+namespace, API URL, issuer URL, and optional cluster CA. Existing namespace
+Secrets supply runtime configuration. Routine releases require no manual digest
+edits, token creation, or `oc apply`. Database, Keycloak, networking, and RBAC
+changes remain separate. Templates receive image, version, and source commit
+from Actions; they declare the release annotations themselves.
+
+### 6. Retry or recover a release
+
+For a resolved temporary failure, use **Actions → Release and deploy API → Run
+workflow**, select `master`, and enter the existing `release_tag`. It reuses the
+recorded image and creates a fresh migration Job. `alembic upgrade head` is a
+no-op when that image's migrations are already applied. An unfinished previous
+migration must terminate before another starts. There is no automatic whole-run
+retry, image rollback, or database downgrade.
+
+If application or migration code needs fixing, publish the next patch version.
+Never move an existing release tag or overwrite its image. A failed migration
+blocks API apply; inspect the named Job's logs before retrying. A successful
+migration remains applied even if rollout or smoke checks fail. Migrations must
+remain compatible with the currently running API. Delete only an exact reviewed
+migration Job when intervention is necessary, never all namespace Jobs.
+
+If publication stopped after uploading the image but before saving `release.json`,
+recover the record from the successful build output and verified source/digest,
+or use a new version. The record contains `format_version: 1`, `release_tag`,
+`commit`, `image_repository`, and `image_ref` (repository:version@sha256:digest).
+Attach it to that tag's GitHub Release; do not replace an existing valid record.
+
+Older releases are blocked in normal automation. For deliberate recovery, stop
+release activity, verify that the previous recorded image supports the current
+schema, and restore only the API image with `oc set image deployment/mic3-api
+api=<recorded-image-ref>`. Wait with `oc rollout status deployment/mic3-api
+--timeout=300s`, verify endpoints and authenticated login, then record the restored
+version, commit, and image in the Deployment's `delivery.mic3.io/version`,
+`delivery.mic3.io/commit`, and `delivery.mic3.io/image` annotations and version
+label. Do not execute the older image's migrations or delete database PVCs.
+
+### 7. Verify the authenticated path
+
+The Actions summary records migration, rollout, public health/readiness, OIDC
+and unauthenticated `401` checks. `/ready` proves database connectivity, not
+schema compatibility or successful authenticated login. For the authenticated
+path, use the configured public API and exact active OIDC issuer, obtain a fresh
+Postman token, and run:
 
 ```powershell
-rg "REPLACE_WITH_V0_1_4_DIGEST" deploy/okd
-rg "ghcr.io/transience-mic3/mic3-api" deploy/okd/application.yaml deploy/okd/migration.yaml
-python -m pytest tests/unit/infrastructure/test_okd_authentication_manifests.py
-```
-
-The first command must produce no output. Do not apply the migration or API
-manifest from the source commit while its digest marker remains.
-
-### 6. Run the database migration
-
-Run the versioned one-shot Job before changing the API Deployment:
-
-```powershell
-oc apply -f deploy/okd/migration.yaml
-oc wait --for=condition=complete `
-  job/mic3-api-migrate-0-1-4 `
-  --timeout=180s
-oc logs job/mic3-api-migrate-0-1-4
-```
-
-The Job receives only MIC3 database settings and runs
-`python -m alembic upgrade head`. If it fails, stop, inspect its logs, and do
-not deploy the API or downgrade the database.
-
-### 7. Deploy and verify the API
-
-```powershell
-oc apply -f deploy/okd/application.yaml
-oc rollout status deployment/mic3-api --timeout=180s
-oc logs deployment/mic3-api --tail=100
-
-$apiHost = oc get route mic3-api -o jsonpath='{.spec.host}'
-Invoke-RestMethod "https://$apiHost/health"
-Invoke-RestMethod "https://$apiHost/ready"
-```
-
-Obtain a fresh Postman access token, then exercise discovery and the real
-authenticated API path from the repository root:
-
-```powershell
-$keycloakHost = oc get route mic3-keycloak -o jsonpath='{.spec.host}'
-$oidcIssuer = "https://$keycloakHost/realms/mic3"
-$env:API_BASE_URL = "https://$apiHost"
-$env:OIDC_ISSUER_URL = $oidcIssuer
-$env:OIDC_ACCESS_TOKEN = Read-Host "Paste the access token"
-
-python -m pytest `
-  tests/smoke/test_oidc.py `
-  tests/smoke/test_authenticated_user.py
-
+$env:API_BASE_URL = Read-Host "Public HTTPS API URL"
+$env:OIDC_ISSUER_URL = Read-Host "Active HTTPS OIDC issuer URL"
+$env:OIDC_ACCESS_TOKEN = Read-Host "Temporary Postman access token"
+python -m pytest tests/smoke/test_oidc.py tests/smoke/test_authenticated_user.py
 Remove-Item Env:OIDC_ACCESS_TOKEN
 ```
 
-Confirm MIC3 PostgreSQL now contains one application user, one external
-identity, and one `member` assignment. Keycloak remains the credential owner;
-MIC3 stores neither its password nor its token.
-
-If only the API rollout fails, use `oc rollout undo deployment/mic3-api` and
-leave the additive schema migration in place. Never recover by deleting either
-PostgreSQL PVC.
+Do not store user access tokens in GitHub Actions. Keycloak reconciliation and
+administrator retirement remain separate operational steps.
 
 ### 8. Validate custom-domain certificates with Let's Encrypt staging
 
