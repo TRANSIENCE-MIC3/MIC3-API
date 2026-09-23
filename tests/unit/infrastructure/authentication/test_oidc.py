@@ -3,7 +3,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from time import time
+from time import monotonic, time
+from types import SimpleNamespace
 from typing import Any
 
 import jwt
@@ -78,7 +79,9 @@ def oidc_server() -> Iterator[OidcTestServer]:
         reported_issuer=issuer,
     )
     state["server"] = server_state
-    thread = Thread(target=server.serve_forever, daemon=True)
+    thread = Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
     thread.start()
     try:
         yield server_state
@@ -220,14 +223,24 @@ def test_rejects_malformed_token(oidc_server: OidcTestServer) -> None:
         _validator(oidc_server).validate("not-a-jwt")
 
 
-def test_refreshes_jwks_when_a_new_key_id_appears(
+def test_refreshes_jwks_after_key_rotation_cooldown(
     oidc_server: OidcTestServer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     validator = _validator(oidc_server)
     validator.validate(_token(oidc_server))
     rotated_key = _signing_key("key-2")
     oidc_server.keys = [rotated_key]
 
+    with pytest.raises(InvalidAccessTokenError):
+        validator.validate(_token(oidc_server, signing_key=rotated_key))
+
+    # PyJWT limits unknown-key refreshes for 30 seconds. Advance only its clock;
+    # keep real HTTP fetching and signature verification without sleeping.
+    monkeypatch.setattr(
+        "jwt.jwks_client.time",
+        SimpleNamespace(monotonic=lambda: monotonic() + 31),
+    )
     identity = validator.validate(
         _token(oidc_server, signing_key=rotated_key)
     )
