@@ -119,7 +119,9 @@ outside declarative management.
 
 Stable version tags trigger GitHub Actions to test, publish, migrate, deploy,
 and verify the API. A GitHub Release records the immutable image digest and
-source commit; manual redeployment reuses that record without rebuilding.
+source commit; manual runs reuse that record or publish the tagged source if
+publication has not happened yet. A fresh manual run from `master` uses its
+workflow and deployment templates, allowing deployment fixes without a new API version.
 Only `pyproject.toml` needs a version edit. See [release instructions](docs/setup-and-deployment.md#5-release-the-api)
 for deployment, retries, and recovery. API releases leave database,
 Keycloak, networking, certificate, and RBAC provisioning separate.

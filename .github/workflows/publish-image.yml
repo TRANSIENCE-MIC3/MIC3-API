@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release to redeploy without rebuilding (for example v0.1.5)"
+        description: "Application tag to publish if needed, then deploy (for example v0.1.5)"
         required: true
         type: string
 
@@ -63,7 +63,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download existing release record (manual runs require one)
+      - name: Reuse an existing release or prepare to publish
         id: record
         run: |
           if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json" 2> "$RUNNER_TEMP/release-error"; then
@@ -73,7 +73,6 @@ jobs:
           else
             # Only a confirmed missing release permits publication; auth/network failures stop.
             grep -Fq '(HTTP 404)' "$RUNNER_TEMP/release-error" || { cat "$RUNNER_TEMP/release-error" >&2; exit 1; }
-            [[ "$GITHUB_EVENT_NAME" == push ]] || { echo 'Manual redeployment requires an existing release.json.' >&2; exit 1; }
             echo 'build_required=true' >> "$GITHUB_OUTPUT"
           fi
       - name: Refuse to overwrite an existing version image
@@ -164,7 +163,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.commit }}
+          # Use deployment instructions from this workflow, independently of the application tag.
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Install OpenShift client
         run: |
@@ -277,7 +277,8 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           Release: $RELEASE_TAG
-          Commit: $COMMIT
+          Application commit: $COMMIT
+          Deployment workflow commit: $GITHUB_WORKFLOW_SHA
           Image: $IMAGE_REF
           Namespace: $OPENSHIFT_NAMESPACE
           Migration Job: $MIGRATION_JOB

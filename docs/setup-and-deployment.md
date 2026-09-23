@@ -405,9 +405,21 @@ from Actions; they declare the release annotations themselves.
 
 ### 6. Retry or recover a release
 
-For a resolved temporary failure, use **Actions → Release and deploy API → Run
-workflow**, select `master`, and enter the existing `release_tag`. It reuses the
-recorded image and creates a fresh migration Job. `alembic upgrade head` is a
+For a resolved failure, use **Actions → Release and deploy API → Run workflow**,
+select `master`, and enter the existing application `release_tag`. If its release
+record exists, the workflow reuses the recorded image without rebuilding. If no
+release or image exists yet, it tests and publishes the tagged application source
+before deploying. A partial publication requires recovery as described below.
+
+The workflow and deployment templates come from the selected workflow commit,
+fixed for that run; application and migration code come from the release tag/image.
+After correcting workflow or template code on `master`, start a **fresh manual
+run** for the same tag, rather than rerunning the old failed run. No version bump
+is needed for deployment-only fixes. Tag pushes still use the workflow at the tag.
+The Actions summary identifies application and deployment-workflow commits
+separately. Keep current templates compatible with any application being retried.
+
+Every deployment creates a fresh migration Job. `alembic upgrade head` is a
 no-op when that image's migrations are already applied. An unfinished previous
 migration must terminate before another starts. There is no automatic whole-run
 retry, image rollback, or database downgrade.
