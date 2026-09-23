@@ -1,0 +1,115 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mic3-api-application
+parameters:
+- name: IMAGE_REF
+  required: true
+- name: RELEASE_VERSION
+  required: true
+- name: SOURCE_COMMIT
+  required: true
+objects:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: mic3-api
+    annotations:
+      delivery.mic3.io/version: ${RELEASE_VERSION}
+      delivery.mic3.io/image: ${IMAGE_REF}
+      delivery.mic3.io/commit: ${SOURCE_COMMIT}
+    labels:
+      app.kubernetes.io/name: mic3-api
+      app.kubernetes.io/version: ${RELEASE_VERSION}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app.kubernetes.io/name: mic3-api
+    template:
+      metadata:
+        annotations:
+          delivery.mic3.io/version: ${RELEASE_VERSION}
+          delivery.mic3.io/image: ${IMAGE_REF}
+          delivery.mic3.io/commit: ${SOURCE_COMMIT}
+        labels:
+          app.kubernetes.io/name: mic3-api
+          app.kubernetes.io/version: ${RELEASE_VERSION}
+          app.kubernetes.io/component: api
+      spec:
+        automountServiceAccountToken: false
+        imagePullSecrets:
+        - name: ghcr-pull
+        nodeSelector:
+          kubernetes.io/os: linux
+          kubernetes.io/arch: amd64
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+        - name: api
+          image: ${IMAGE_REF}
+          imagePullPolicy: IfNotPresent
+          ports:
+          - name: http
+            containerPort: 8000
+          env:
+          - name: APP_ENV
+            value: development
+          - name: DB_HOST
+            value: mic3-postgres
+          - name: DB_PORT
+            value: '5432'
+          - name: DB_NAME
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: database
+          - name: DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: username
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: password
+          - name: OIDC_ISSUER_URL
+            valueFrom:
+              secretKeyRef:
+                name: mic3-oidc-config
+                key: issuer-url
+          - name: OIDC_AUDIENCE
+            valueFrom:
+              secretKeyRef:
+                name: mic3-oidc-config
+                key: audience
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+        serviceAccountName: mic3-api-runtime

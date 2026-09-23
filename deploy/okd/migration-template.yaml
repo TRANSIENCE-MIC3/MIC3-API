@@ -1,0 +1,93 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mic3-api-migration
+parameters:
+- name: IMAGE_REF
+  required: true
+- name: RELEASE_VERSION
+  required: true
+- name: SOURCE_COMMIT
+  required: true
+objects:
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    annotations:
+      delivery.mic3.io/version: ${RELEASE_VERSION}
+      delivery.mic3.io/image: ${IMAGE_REF}
+      delivery.mic3.io/commit: ${SOURCE_COMMIT}
+    labels:
+      app.kubernetes.io/name: mic3-api
+      app.kubernetes.io/component: database-migration
+      app.kubernetes.io/version: ${RELEASE_VERSION}
+    generateName: mic3-api-migrate-
+  spec:
+    backoffLimit: 0
+    template:
+      metadata:
+        annotations:
+          delivery.mic3.io/version: ${RELEASE_VERSION}
+          delivery.mic3.io/image: ${IMAGE_REF}
+          delivery.mic3.io/commit: ${SOURCE_COMMIT}
+        labels:
+          app.kubernetes.io/name: mic3-api
+          app.kubernetes.io/component: database-migration
+          app.kubernetes.io/version: ${RELEASE_VERSION}
+      spec:
+        restartPolicy: Never
+        automountServiceAccountToken: false
+        imagePullSecrets:
+        - name: ghcr-pull
+        nodeSelector:
+          kubernetes.io/os: linux
+          kubernetes.io/arch: amd64
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+        - name: migrate
+          image: ${IMAGE_REF}
+          imagePullPolicy: IfNotPresent
+          command:
+          - python
+          - -m
+          - alembic
+          - upgrade
+          - head
+          env:
+          - name: DB_HOST
+            value: mic3-postgres
+          - name: DB_PORT
+            value: '5432'
+          - name: DB_NAME
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: database
+          - name: DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: username
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mic3-postgres-credentials
+                key: password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+        serviceAccountName: mic3-api-migration
+    activeDeadlineSeconds: 600
+    ttlSecondsAfterFinished: 86400

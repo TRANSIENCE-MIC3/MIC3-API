@@ -52,6 +52,14 @@ def _run_config_cli(network: Network, config_directory: Path) -> tuple[int, str]
         .with_env("IMPORT_VARSUBSTITUTION_ENABLED", "true")
         .with_env("IMPORT_BEHAVIORS_CHECKSUM_CHANGED", "continue")
         .with_env("LOGGING_LEVEL_ROOT", "INFO")
+        # The EOSC realm uses SMTP substitution. These are disposable test values;
+        # reconciliation does not send mail or contact a real SMTP service.
+        .with_env("MIC3_SMTP_HOST", "smtp.invalid")
+        .with_env("MIC3_SMTP_PORT", "587")
+        .with_env("MIC3_SMTP_FROM", "noreply@example.invalid")
+        .with_env("MIC3_SMTP_FROM_NAME", "MIC3 test")
+        .with_env("MIC3_SMTP_USER", "test-only-smtp-user")
+        .with_env("MIC3_SMTP_PASSWORD", "test-only-smtp-password")
         .with_volume_mapping(config_directory.resolve(), "/config", "ro")
     )
     config.tmpfs["/tmp"] = "rw,nosuid,nodev,size=64m"
@@ -227,7 +235,8 @@ def test_keycloak_26_reconciliation_is_idempotent_and_preserves_users(
         )
         eosc_status, eosc_logs = _run_config_cli(network, eosc_directory)
         assert eosc_status == 0, eosc_logs
-        assert _realm(client, base_url)["registrationAllowed"] is False
+        assert _realm(client, base_url)["registrationAllowed"] is True
+        assert _realm(client, base_url)["verifyEmail"] is True
         assert {"mic3-api", "mic3-postman"}.issubset(_clients(client, base_url))
         assert _usernames(client, base_url) == set()
 

@@ -1,95 +1,286 @@
-name: Publish API image
+name: Release and deploy API
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to publish, for example v0.1.4"
+        description: "Existing release to redeploy without rebuilding (for example v0.1.5)"
         required: true
         type: string
 
 permissions:
   contents: read
-  packages: write
+
+defaults:
+  run:
+    shell: bash
 
 env:
   IMAGE_NAME: ghcr.io/transience-mic3/mic3-api
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
 
 jobs:
-  publish:
+  prepare:
+    name: Prepare release
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: publish-${{ github.repository }}-${{ inputs.release_tag || github.ref_name }}
+      cancel-in-progress: false
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+      image_ref: ${{ steps.image.outputs.image_ref }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Check out the release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate stable release tag
+        run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-
-      - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      - name: Check dependency compatibility
-        run: python -m pip check
-
-      - name: Verify release tag matches package version
+      - name: Check package version and source commit
+        id: source
         run: |
-          python - <<'PY'
-          import os
-          import tomllib
-
-          with open("pyproject.toml", "rb") as project_file:
-              package_version = tomllib.load(project_file)["project"]["version"]
-
-          release_tag = os.environ["RELEASE_TAG"]
-          expected_tag = f"v{package_version}"
-          if release_tag != expected_tag:
-              raise SystemExit(
-                  f"Release tag {release_tag} does not match "
-                  f"pyproject.toml version {package_version}."
-              )
-          PY
-
-      - name: Run unit and integration tests
-        run: python -m pytest tests/unit tests/integration
-
-      - name: Generate image tags and labels
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          # Use the checked-out release commit, including for manual runs.
-          context: git
-          images: ${{ env.IMAGE_NAME }}
-          flavor: latest=false
-          tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Log in to GitHub Container Registry
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          [[ "$RELEASE_TAG" == "v$version" ]]
+          commit=$(git rev-parse HEAD)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and publish the image
+      - name: Download existing release record (manual runs require one)
+        id: record
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json" 2> "$RUNNER_TEMP/release-error"; then
+            jq -e '.draft == false and .prerelease == false and ([.assets[] | select(.name == "release.json")] | length == 1)' "$RUNNER_TEMP/release-metadata.json"
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern release.json --dir "$RUNNER_TEMP"
+            echo 'build_required=false' >> "$GITHUB_OUTPUT"
+          else
+            # Only a confirmed missing release permits publication; auth/network failures stop.
+            grep -Fq '(HTTP 404)' "$RUNNER_TEMP/release-error" || { cat "$RUNNER_TEMP/release-error" >&2; exit 1; }
+            [[ "$GITHUB_EVENT_NAME" == push ]] || { echo 'Manual redeployment requires an existing release.json.' >&2; exit 1; }
+            echo 'build_required=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse to overwrite an existing version image
+        if: steps.record.outputs.build_required == 'true'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          if docker manifest inspect "$IMAGE_NAME:$VERSION" > /dev/null 2> "$RUNNER_TEMP/image-error"; then
+            echo 'Image already exists. Recover its release.json or publish a new version; see docs/setup-and-deployment.md.' >&2
+            exit 1
+          fi
+          # A registry/authentication failure must not be mistaken for a missing image.
+          grep -Fq "no such manifest: $IMAGE_NAME:$VERSION" "$RUNNER_TEMP/image-error" || { cat "$RUNNER_TEMP/image-error" >&2; exit 1; }
+      - name: Install test dependencies
+        if: steps.record.outputs.build_required == 'true'
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+      - name: Run unit and integration tests
+        if: steps.record.outputs.build_required == 'true'
+        run: python -m pytest tests/unit tests/integration
+      - name: Set up Docker Buildx
+        if: steps.record.outputs.build_required == 'true'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build and publish image
+        if: steps.record.outputs.build_required == 'true'
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.source.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+      - name: Save immutable release record
+        if: steps.record.outputs.build_required == 'true'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          jq -n --arg tag "$RELEASE_TAG" --arg commit "$COMMIT" --arg repo "$IMAGE_NAME" \
+            --arg image "$IMAGE_NAME:$VERSION@$DIGEST" \
+            '{format_version: 1, release_tag: $tag, commit: $commit, image_repository: $repo, image_ref: $image}' > "$RUNNER_TEMP/release.json"
+          gh release create "$RELEASE_TAG" "$RUNNER_TEMP/release.json" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "$RELEASE_TAG" --notes 'API image published. See Actions for deployment results.'
+      - name: Validate release record and pass its image to deployment
+        id: image
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          # One contract check for both newly published and reused records.
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$COMMIT" --arg repo "$IMAGE_NAME" --arg version "$VERSION" '
+            .format_version == 1 and .release_tag == $tag and .commit == $commit and
+            .image_repository == $repo and (.image_ref | startswith($repo + ":" + $version + "@")) and
+            (.image_ref | ltrimstr($repo + ":" + $version + "@") | test("^sha256:[0-9a-f]{64}$"))
+          ' "$RUNNER_TEMP/release.json"
+          image=$(jq -r .image_ref "$RUNNER_TEMP/release.json")
+          docker manifest inspect "$image" > /dev/null
+          echo "image_ref=$image" >> "$GITHUB_OUTPUT"
+          printf 'Release: `%s`\n\nImage: `%s`\n' "$RELEASE_TAG" "$image" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to EOSC
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: eosc-development
+    concurrency:
+      group: eosc-development
+      cancel-in-progress: false
+    env:
+      IMAGE_REF: ${{ needs.prepare.outputs.image_ref }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+      OPENSHIFT_SERVER: ${{ vars.OPENSHIFT_SERVER }}
+      OPENSHIFT_NAMESPACE: ${{ vars.OPENSHIFT_NAMESPACE }}
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      OIDC_ISSUER_URL: ${{ vars.OIDC_ISSUER_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Install OpenShift client
+        run: |
+          mkdir -p "$RUNNER_TEMP/oc-client"
+          cd "$RUNNER_TEMP/oc-client"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.21.0/openshift-client-linux.tar.gz -o oc.tar.gz
+          echo '735b43f9ae4ffe8f1777b13e23d691540f51dcbe18ac73ab058754d42abfb4b2  oc.tar.gz' | sha256sum --check -
+          tar -xzf oc.tar.gz oc
+          echo "$RUNNER_TEMP/oc-client" >> "$GITHUB_PATH"
+      - name: Configure cluster access
+        env:
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+          OPENSHIFT_CA_PEM: ${{ secrets.OPENSHIFT_CA_PEM }}
+        run: |
+          : "${OPENSHIFT_TOKEN:?Set the environment secret}" "${OPENSHIFT_NAMESPACE:?Set the environment variable}"
+          for url in "$OPENSHIFT_SERVER" "$API_BASE_URL" "$OIDC_ISSUER_URL"; do
+            [[ "$url" == https://* ]] || { echo 'Configure HTTPS server and public endpoint URLs.' >&2; exit 1; }
+          done
+          export KUBECONFIG="$RUNNER_TEMP/eosc-kubeconfig"
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          umask 077
+          oc config set-cluster eosc --server="$OPENSHIFT_SERVER"
+          oc config set-credentials deployer --token="$OPENSHIFT_TOKEN"
+          oc config set-context eosc --cluster=eosc --user=deployer --namespace="$OPENSHIFT_NAMESPACE"
+          oc config use-context eosc
+          if [[ -n "$OPENSHIFT_CA_PEM" ]]; then
+            printf '%s' "$OPENSHIFT_CA_PEM" > "$RUNNER_TEMP/eosc-ca.pem"
+            oc config set-cluster eosc --certificate-authority="$RUNNER_TEMP/eosc-ca.pem" --embed-certs=true
+          fi
+      - name: Reject older releases
+        run: |
+          current=$(oc --request-timeout=20s get deployment mic3-api -o jsonpath='{.metadata.annotations.delivery\.mic3\.io/version}')
+          : "${current:?Live release version is missing; inspect the Deployment before retrying}"
+          [[ "$(printf '%s\n' "$current" "$VERSION" | sort -V | head -n1)" == "$current" ]] || { echo 'Older versions require manual recovery.' >&2; exit 1; }
+          if [[ "$current" == "$VERSION" ]]; then
+            live_image=$(oc --request-timeout=20s get deployment mic3-api -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}')
+            [[ "$live_image" == "$IMAGE_REF" ]] || { echo 'This version already uses a different image; inspect before retrying.' >&2; exit 1; }
+          fi
+      - name: Render and server-validate both manifests
+        run: |
+          for resource in application migration; do
+            oc process --local -f "deploy/okd/$resource-template.yaml" \
+              -p "IMAGE_REF=$IMAGE_REF" -p "RELEASE_VERSION=$VERSION" -p "SOURCE_COMMIT=$COMMIT" \
+              -o json | jq '.items[0]' > "$RUNNER_TEMP/$resource.json"
+          done
+          oc --request-timeout=20s apply --dry-run=server -f "$RUNNER_TEMP/application.json"
+          oc --request-timeout=20s create --dry-run=server -f "$RUNNER_TEMP/migration.json"
+      - name: Run database migration
+        id: migrate
+        run: |
+          # Terminal Jobs return immediately; unfinished Jobs share an eleven-minute wait.
+          wait_job() {
+            local job=$1 conditions
+            while (( SECONDS < deadline )); do
+              conditions=$(oc --request-timeout=20s get "$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}') || return 1
+              case "$conditions" in
+                *Failed*) echo Failed; return 0 ;;
+                *Complete*) echo Complete; return 0 ;;
+              esac
+              sleep 5
+            done
+            echo "$job did not finish; inspect it before retrying." >&2
+            return 1
+          }
+          oc --request-timeout=20s get jobs -l app.kubernetes.io/name=mic3-api,app.kubernetes.io/component=database-migration -o name > "$RUNNER_TEMP/migration-jobs"
+          deadline=$((SECONDS + 660))
+          while IFS= read -r previous; do
+            echo "job=${previous#*/}" >> "$GITHUB_OUTPUT"
+            wait_job "$previous"
+          done < "$RUNNER_TEMP/migration-jobs"
+          job=$(oc --request-timeout=20s create -f "$RUNNER_TEMP/migration.json" -o jsonpath='{.metadata.name}')
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+          deadline=$((SECONDS + 660))
+          state=$(wait_job "job/$job")
+          [[ "$state" == Complete ]] || { echo "Migration $job failed." >&2; exit 1; }
+      - name: Apply API and wait for rollout
+        id: rollout
+        run: |
+          oc --request-timeout=20s apply -f "$RUNNER_TEMP/application.json"
+          oc rollout status deployment/mic3-api --timeout=300s
+          oc --request-timeout=20s get deployment mic3-api -o json |
+            jq -e --arg image "$IMAGE_REF" '.spec.template.spec.containers[] | select(.name == "api") | .image == $image'
+      - name: Verify public endpoints
+        id: smoke
+        run: |
+          api=${API_BASE_URL%/}
+          issuer=${OIDC_ISSUER_URL%/}
+          curl --fail --silent --show-error --max-time 15 --retry 2 "$api/health" | jq -e '.status == "healthy"'
+          curl --fail --silent --show-error --max-time 15 --retry 2 "$api/ready" | jq -e '.status == "ready"'
+          [[ "$(curl --silent --show-error --max-time 15 -o /dev/null -w '%{http_code}' "$api/users/me")" == 401 ]]
+          curl --fail --silent --show-error --max-time 15 --retry 2 "$issuer/.well-known/openid-configuration" > "$RUNNER_TEMP/discovery.json"
+          jq -e --arg issuer "$issuer" '.issuer == $issuer and (.jwks_uri | startswith("https://"))' "$RUNNER_TEMP/discovery.json"
+          curl --fail --silent --show-error --max-time 15 --retry 2 "$(jq -r .jwks_uri "$RUNNER_TEMP/discovery.json")" | jq -e '.keys | length > 0'
+      - name: Collect migration logs
+        if: always() && steps.migrate.outputs.job != ''
+        env:
+          MIGRATION_JOB: ${{ steps.migrate.outputs.job }}
+        run: |
+          oc --request-timeout=20s logs "job/$MIGRATION_JOB" --all-containers=true --tail=200 || true
+          oc --request-timeout=20s describe job "$MIGRATION_JOB"
+      - name: Record outcome and remove local credentials
+        if: always()
+        env:
+          JOB_RESULT: ${{ job.status }}
+          MIGRATION_JOB: ${{ steps.migrate.outputs.job }}
+          MIGRATION_RESULT: ${{ steps.migrate.outcome }}
+          ROLLOUT_RESULT: ${{ steps.rollout.outcome }}
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          Release: $RELEASE_TAG
+          Commit: $COMMIT
+          Image: $IMAGE_REF
+          Namespace: $OPENSHIFT_NAMESPACE
+          Migration Job: $MIGRATION_JOB
+
+          | Migration | Rollout | Public checks | Overall |
+          | --- | --- | --- | --- |
+          | $MIGRATION_RESULT | $ROLLOUT_RESULT | $SMOKE_RESULT | $JOB_RESULT |
+          EOF
+          rm -f "$RUNNER_TEMP/eosc-kubeconfig" "$RUNNER_TEMP/eosc-ca.pem"

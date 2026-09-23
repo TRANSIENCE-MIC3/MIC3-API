@@ -117,10 +117,12 @@ settings and OIDC clients are applied through a repeatable, one-shot
 `keycloak-config-cli` Job after Keycloak starts; users, roles, and groups remain
 outside declarative management.
 
-Release `0.1.4` uses a two-commit promotion: the source/tag commit publishes the
-image, then a promotion commit pins its resulting digest in the API Deployment
-and one-shot migration Job. The migration must complete before the API is
-updated. No manifest hard-codes a namespace, Route hostname, or credential.
+Stable version tags trigger GitHub Actions to test, publish, migrate, deploy,
+and verify the API. A GitHub Release records the immutable image digest and
+source commit; manual redeployment reuses that record without rebuilding.
+Only `pyproject.toml` needs a version edit. See [release instructions](docs/setup-and-deployment.md#5-release-the-api)
+for deployment, retries, and recovery. API releases leave database,
+Keycloak, networking, certificate, and RBAC provisioning separate.
 
 ## Naming and versioning
 
