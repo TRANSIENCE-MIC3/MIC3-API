@@ -86,7 +86,10 @@ jobs:
             exit 1
           fi
           # A registry/authentication failure must not be mistaken for a missing image.
-          grep -Fq "no such manifest: $IMAGE_NAME:$VERSION" "$RUNNER_TEMP/image-error" || { cat "$RUNNER_TEMP/image-error" >&2; exit 1; }
+          case "$(cat "$RUNNER_TEMP/image-error")" in
+            "manifest unknown" | "no such manifest: $IMAGE_NAME:$VERSION") ;;
+            *) cat "$RUNNER_TEMP/image-error" >&2; exit 1 ;;
+          esac
       - name: Install test dependencies
         if: steps.record.outputs.build_required == 'true'
         run: |
