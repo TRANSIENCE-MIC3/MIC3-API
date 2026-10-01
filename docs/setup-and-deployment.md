@@ -105,6 +105,66 @@ Smoke-test variables must be set in the process/IDE; `API_BASE_URL` is not read
 from `.env`. Never save user tokens in Git, profiles, Postman exports, or Actions.
 Readiness proves database connectivity, not schema compatibility or login success.
 
+## MIC3 administrator authorization
+
+MIC3 administrator access is a local database role, independent of Keycloak
+administrator accounts and token role claims. Login provisions only `member`.
+The operator command requires access to the application runtime and MIC3 database
+credentials; it needs neither a running API nor OIDC settings. It is not an HTTP
+endpoint. Use the existing `DB_*` environment configuration (or local `.env`).
+
+After `python -m alembic upgrade head`, log in as the intended ordinary MIC3 user
+and obtain its internal UUID from `GET /users/me`. Confirm the target environment
+and UUID, then run:
+
+```powershell
+python -m mic3_api.cli grant-admin --user-id <MIC3_UUID>
+```
+
+The command adds `admin` without removing other roles. Repeating it is safe.
+It rejects unknown or inactive users and missing role configuration. Exit codes
+are `0` for granted/already present, `2` for invalid arguments, and `1` for
+application/database failures. No username/email lookup or implicit account
+creation occurs. Operator database credentials must be kept private.
+
+`GET /users?limit=50&offset=0` returns `{items, limit, offset}`. Items contain
+`id`, nullable `email`, nullable `display_name`, `is_active`, and sorted `roles`.
+The directory includes inactive accounts, orders by UUID, and allows limits
+1-100 with a nonnegative offset. Active MIC3 admins receive `200`; ordinary or
+inactive users receive `403`; missing/invalid tokens receive `401`. Promotion
+is visible on the next request with any still-valid access token.
+
+For local acceptance, verify the intended member receives `403` before granting,
+run the command, then verify `/users/me` includes `admin` and `/users` returns
+`200`. Keep a separate member for the `403` check. Run the read-only smoke test
+with temporary process environment values:
+
+```powershell
+$env:API_BASE_URL = "http://localhost:8000"
+$env:OIDC_ADMIN_ACCESS_TOKEN = Read-Host "Temporary admin access token"
+$env:OIDC_MEMBER_ACCESS_TOKEN = Read-Host "Temporary ordinary-member access token"
+try {
+  python -m pytest tests/smoke/test_admin_authorization.py
+} finally {
+  Remove-Item Env:OIDC_ADMIN_ACCESS_TOKEN, Env:OIDC_MEMBER_ACCESS_TOKEN
+}
+```
+
+For EOSC, first deploy the version containing this command and migration using
+the normal release procedure. Obtain the intended MIC3 user's UUID from the live
+`/users/me`, confirm the selected project and deployment, and run the same command
+inside the deployed API container using its existing database environment:
+
+```powershell
+oc project -q
+oc exec deployment/mic3-api -c api -- python -m mic3_api.cli grant-admin --user-id <MIC3_UUID>
+```
+
+Run the smoke checks with the live API URL and separate live admin/member tokens.
+Local acceptance does not establish live acceptance. Downgrading the admin-role
+migration removes admin assignments and the admin role, while preserving users
+and their other roles.
+
 ## EOSC routine operations
 
 The integration deployment has separate MIC3/Keycloak PostgreSQL Services,

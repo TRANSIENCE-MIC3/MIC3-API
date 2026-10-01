@@ -12,6 +12,7 @@ and on EOSC/OKD. Model execution is planned, not yet implemented.
 | `GET /health` | Public, dependency-independent health check |
 | `GET /ready` | PostgreSQL readiness; returns `503` when unavailable |
 | `GET /users/me` | Authenticated MIC3 profile and local roles |
+| `GET /users` | Admin-only paginated MIC3 user directory |
 | `GET /docs` | Swagger UI |
 | `GET /openapi.json` | OpenAPI schema |
 

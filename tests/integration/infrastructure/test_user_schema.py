@@ -22,6 +22,28 @@ APPLICATION_TABLES = {"users", "roles", "user_identities", "user_roles"}
 MEMBER_DESCRIPTION = "Default non-elevated MIC3 member role."
 
 
+def test_admin_migration_preserves_users_and_member_assignments(alembic_config, postgres_test_settings):
+    command.upgrade(alembic_config, "0001_user_member_schema")
+    engine = create_engine(postgres_test_settings.database_url, poolclass=NullPool)
+    user_id = uuid4()
+    try:
+        with engine.begin() as connection:
+            connection.execute(User.__table__.insert(), {"id": user_id})
+            connection.execute(UserRole.__table__.insert(), {"user_id": user_id, "role_name": "member"})
+        command.upgrade(alembic_config, "head")
+        with engine.begin() as connection:
+            assert connection.scalar(select(User.id)) == user_id
+            assert connection.execute(select(UserRole.role_name)).scalars().all() == ["member"]
+            connection.execute(UserRole.__table__.insert(), {"user_id": user_id, "role_name": "admin"})
+        command.downgrade(alembic_config, "0001_user_member_schema")
+        with engine.connect() as connection:
+            assert connection.scalar(select(User.id)) == user_id
+            assert connection.execute(select(UserRole.role_name)).scalars().all() == ["member"]
+            assert connection.execute(select(Role.name)).scalars().all() == ["member"]
+    finally:
+        engine.dispose()
+
+
 def test_upgrade_creates_schema_matching_model_metadata(
     alembic_config: Config,
     postgres_test_settings: Settings,
@@ -53,7 +75,7 @@ def test_upgrade_creates_schema_matching_model_metadata(
         engine.dispose()
 
 
-def test_member_is_the_only_seeded_role_and_upgrade_is_idempotent(
+def test_roles_are_seeded_and_upgrade_is_idempotent(
     migrated_engine: Engine,
     alembic_config: Config,
 ) -> None:
@@ -64,7 +86,10 @@ def test_member_is_the_only_seeded_role_and_upgrade_is_idempotent(
             select(Role.name, Role.description).order_by(Role.name)
         ).all()
 
-    assert [tuple(role) for role in roles] == [("member", MEMBER_DESCRIPTION)]
+    assert [tuple(role) for role in roles] == [
+        ("admin", "Explicitly granted MIC3 administrator role."),
+        ("member", MEMBER_DESCRIPTION),
+    ]
 
 
 def test_downgrade_removes_all_application_tables(
@@ -210,5 +235,5 @@ def test_identity_and_role_foreign_keys_are_enforced(
         with migrated_engine.begin() as connection:
             connection.execute(
                 UserRole.__table__.insert(),
-                {"user_id": existing_user_id, "role_name": "admin"},
+                {"user_id": existing_user_id, "role_name": "nonexistent"},
             )
