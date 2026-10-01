@@ -4,293 +4,156 @@ SPDX-FileCopyrightText: 2026 Fraunhofer-Gesellschaft e.V.
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# mic3-api Architecture PRD
+# MIC3 platform architecture
 
-## Recommended Tech Stack
+MIC3 will provide a common API to request, track, reuse, and retrieve results
+from independent scientific models. This document records intended architecture;
+[local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
+Execution, Kafka, adapters, and result reuse are not yet implemented.
 
-This proposal assumes a central platform that can run multiple independent modeling projects without forcing each modeling team to rewrite its model as an API.
-
-- API service: FastAPI with Pydantic request and response models
-- Persistence: PostgreSQL as the source of truth, accessed through SQLAlchemy and evolved with Alembic
-- Authentication: OIDC/OAuth2 with JWT access tokens; Keycloak is the initial identity provider and identity broker
-- Asynchronous messaging: Apache Kafka for durable run commands and lifecycle events, introduced after the initial platform bootstrap
-- Reliability: a transactional outbox publishes committed database changes to Kafka
-- Model execution: independent model containers launched as finite Kubernetes/OKD Jobs by a dedicated worker
-- Artifact storage: object storage or persistent volumes for model outputs
-- Deployment and orchestration: [Kubernetes](https://eu-2.paas.open-science-cloud.ec.europa.eu/add/all-namespaces) or OKD, with Docker used for local development
-- Observability: logs per run at first, future options include Prometheus, Grafana, and Loki when the platform matures
-
-Redis, RabbitMQ, and a second message broker are not part of the current architecture. Redis may be reconsidered later only for a concrete caching or locking requirement.
-
-## Decision Summary
-
-- The FastAPI service is the public control plane. It validates requests, performs synchronous CRUD and queries, and records durable state in PostgreSQL.
-- PostgreSQL is authoritative; Kafka is a communication mechanism, not application storage.
-- Run execution and other long-running work are event-driven. Authentication, ordinary reads, metadata edits, and most CRUD remain synchronous.
-- The API writes a run record and an outbox event in one database transaction. An outbox publisher sends the message to Kafka, and a worker consumes it, reads the full run configuration from PostgreSQL, and creates the Kubernetes Job.
-- Only the worker receives Kubernetes Job permissions. The public API must not create Jobs directly.
-- Keycloak runs as an independent infrastructure service, issues a consistent MIC3 token, and can later broker Google, GitHub, institutional, or EOSC/MyAccessID identities.
-- The initial delivery remains deliberately small: deploy and verify `/health`, then validate a manual Job before adding database, authentication, Kafka, and worker behavior.
-
-## Product Summary
-
-The platform will provide one common API for starting, tracking, caching, and retrieving results from multiple models. Each modeling project remains an independent containerized workload. The central platform owns the user-facing API, run records, status tracking, caching decisions, artifact indexing, and result retrieval.
-
-The key abstraction is a model adapter. An adapter translates a platform request into the configuration required by a specific model, starts or prepares the model run, then translates the model's output folder into platform artifacts, optional normalized views, and metadata that users can retrieve later. Modeling teams need to provide a stable way to run their model and
-a clear contract for the outputs they produce.
-
-## High-Level Architecture
-
-### Platform overview
+## Components and boundaries
 
 ```mermaid
 flowchart LR
-    subgraph access["Access"]
-        direction TB
-        users["Users and clients"]
-        keycloak["Keycloak\nOIDC / OAuth2"]
-        ingress["Ingress"]
-
-        users -. "sign in" .-> keycloak
-        users --> ingress
-    end
-
-    subgraph platform["MIC3 platform"]
-        direction TB
-        api["FastAPI API\ncontrol plane"]
-        postgres[("PostgreSQL\nstate + outbox")]
-        kafka["Kafka\nevent backbone"]
-        worker["MIC3 worker\nexecution orchestration"]
-
-        api --> postgres
-        postgres -. "committed events" .-> kafka
-        kafka --> worker
-    end
-
-    subgraph runtime["Execution and outputs"]
-        direction TB
-        jobs["Kubernetes / OKD Jobs\nmodel containers"]
-        artifacts[("Artifact storage")]
-
-        jobs --> artifacts
-    end
-
-    access -->|authenticated requests| platform
-    platform -->|model execution and results| runtime
+    user[User] -. sign in .-> idp[Keycloak / OIDC]
+    user --> api[FastAPI]
+    api --> db[(PostgreSQL: state + outbox)]
+    db --> publisher[Outbox publisher]
+    publisher --> kafka[Kafka]
+    kafka --> worker[Worker]
+    worker --> db
+    worker --> jobs[Kubernetes Jobs: model containers]
+    jobs --> storage[(Persistent artifacts)]
+    worker --> storage
+    api --> storage
 ```
 
-### Authentication flow
+- **FastAPI** owns synchronous authentication/authorization, CRUD, run admission,
+  result lookup, and retrieval. SQLAlchemy manages persistence; Alembic alone
+  owns schema evolution. The API must not receive model Job permissions.
+- **PostgreSQL** is authoritative for users, run identity/state, ownership,
+  fingerprints, artifact references, and outbox records. Kafka transports events;
+  it does not replace application storage or cache scientific results.
+- **Kafka** is required by the event-driven architecture. A publisher delivers
+  committed outbox events; consumers use stable identifiers to load authoritative
+  state. Events must not carry user tokens, large datasets, or output files.
+- **The worker** owns model execution orchestration, Kubernetes interaction,
+  lifecycle recovery, and output collection. It receives minimal Job RBAC and
+  separate database permissions. Workers do not create or migrate schemas.
+- **Scientific models** run in independent containers with their own language and
+  dependencies. API, worker, model images, and infrastructure remain separately
+  deployable even if maintained in one repository.
+- **Persistent artifact storage** holds raw files and retained logs; PostgreSQL
+  indexes their locations, sizes, checksums, and meaning where known. Choose PVC
+  or object storage during execution integration; API-local disk is not durable
+  storage. Normalize only outputs with a concrete product/scientific use.
+
+## Model integration contract
+
+Default to one adapter per integrated model. An adapter validates model-specific
+requests, prepares configuration/input bindings, and interprets expected outputs.
+Keep those responsibilities distinct from scheduling, messaging, storage access,
+and shared result-reuse decisions. Adapters need not be separate services.
+
+The shared execution boundary describes model/image version, command and working
+directory, input references/versions, configuration, resource requirements, and
+expected artifact descriptors. It must not require a scientific Python base
+class, a universal configuration format, CSV inputs, DataFrames, or one output
+directory layout. Wrappers can adapt existing non-interactive programs without
+rewriting their scientific logic. Remote input retrieval must have reproducible
+versions/snapshots or explicitly restricted result reuse.
+
+EU-MFA is the first integration target. Its YAML, CSV, Python/flodym types, and
+submodel selection remain inside its integration. Supporting buildings first
+does not introduce a buildings-specific public endpoint or require one adapter
+per submodel. Define abstractions from verified behavior, then test their
+independence from EU-MFA; do not prebuild a plugin framework.
+
+Model onboarding must establish a pinned source/image, reproducible dependencies,
+one batch invocation, accepted inputs/configuration, expected outputs and failure
+behavior, resource measurements, and a repeatable baseline. Scientific acceptance
+belongs with the model owners; a zero exit code alone is insufficient.
+
+## Execution and recovery
+
+The sequence below applies after authorization, validation, and reuse/admission
+checks determine that a new execution is required. Public request/response
+schemas will be defined in their implementation milestone.
 
 ```mermaid
 sequenceDiagram
-    participant Browser
-    participant Keycloak
-    participant IdP as Upstream identity provider
-    participant API as FastAPI
-    participant DB as PostgreSQL
-
-    Browser->>Keycloak: Start login
-
-    alt Local Keycloak account
-        Keycloak->>Keycloak: Validate credentials
-    else Google, GitHub, institutional or EOSC login
-        Keycloak->>IdP: Redirect authentication
-        IdP-->>Keycloak: Verified external identity
-    end
-
-    Keycloak-->>Browser: Issue MIC3 access token
-    Browser->>API: Request with Bearer token
-    API->>API: Validate signature, issuer, audience and expiry
-    API->>DB: Resolve external subject to MIC3 user
-    DB-->>API: User profile and authorization data
-    API-->>Browser: Authorized response
-```
-
-### Event-driven run execution
-
-```mermaid
-sequenceDiagram
-    participant API as FastAPI
+    participant Client
+    participant API
     participant DB as PostgreSQL
     participant Events as Outbox publisher + Kafka
-    participant Worker as MIC3 worker
-    participant K8s as Kubernetes / OKD
-
-    Note over API: POST /runs
-
-    API->>DB: Begin transaction
-    API->>DB: Insert pending run
-    API->>DB: Insert run.requested outbox event
-    API->>DB: Commit transaction
-    DB-->>API: Return pending run
-
-    Events->>DB: Read committed outbox events
-    Events->>Worker: run.requested(run_id)
-    Worker->>DB: Load authoritative run configuration
-    Worker->>K8s: Create model Job
-    K8s-->>Worker: Pending / Running / Completed / Failed
-    Worker->>DB: Update run status and write lifecycle outbox event
+    participant Worker
+    participant Jobs as Kubernetes
+    participant Storage as Artifact storage
+    Client->>API: Request execution
+    API->>DB: Commit run + outbox event atomically
+    API-->>Client: Run identifier and queued status
+    Events->>DB: Read committed outbox
+    Events->>Worker: Execution event identifying run
+    Worker->>DB: Load state and claim eligible work
+    Worker->>Jobs: Create/recover Job when capacity allows
+    Jobs-->>Worker: Execution status
+    Worker->>Storage: Validate and retain required outputs/logs
+    Worker->>DB: Persist outcome/artifact references + lifecycle outbox event
+    Worker->>Jobs: Allow cleanup after required collection
 ```
 
-### Artifact processing
+Publication and consumption may repeat. Dispatch must remain idempotent across
+worker crashes and repeated events, including a crash between Job creation and
+recording its identity. Recovery must find existing execution rather than start
+another. Persist failures too; distinguish successful computation from successful
+output collection. Do not report reusable success until required artifacts exist.
 
-```mermaid
-flowchart LR
-    job["Completed model Job"]
-    workspace["Run workspace"]
-    collector["Artifact collector"]
+Bound admitted work and concurrent executions globally and per user. Queued runs
+remain durable platform work; do not create a Kubernetes Job for every waiting
+request. Apply configurable CPU, memory, temporary-storage, runtime, and retry
+bounds. Cluster quotas are a final guard, not the admission policy.
 
-    subgraph managed["Managed platform data"]
-        direction TB
-        files[("Artifact storage\nfiles, logs and reports")]
-        metadata[("PostgreSQL\nartifact metadata")]
-    end
+Completed Job/Pod objects are temporary diagnostics, not run history. Preserve
+outcomes, required artifacts, and useful bounded logs before automated cleanup.
+Choose cleanup/retention periods against throughput and object/storage quotas;
+retaining every completed Job for a day is not a universal default. Failed runs
+may retain diagnostics longer, within explicit limits.
 
-    subgraph result_access["Result access"]
-        direction TB
-        api["FastAPI API"]
-        client["User or client"]
-        client --> api
-    end
+## Shared result reuse and optional Redis
 
-    job --> workspace --> collector
-    collector --> files
-    collector -. "index metadata" .-> metadata
-    api -. "query metadata" .-> metadata
-    api -. "download artifacts" .-> files
-```
+Persisting a result makes it retrievable; reuse avoids another equivalent model
+execution. Implement reuse once in the platform, with adapters supplying validated,
+normalized model inputs. Fingerprints include model image/version, adapter version,
+input snapshots/content identities, effective configuration, and relevant seeds.
+Changing external data or stochastic behavior must not silently reuse stale results.
 
-## Architecture Proposal
+- Return an equivalent successful result only when its artifacts remain available
+  and the requester is authorized to access it.
+- Reference equivalent queued/running work where permitted. Enforce duplicate
+  prevention atomically in PostgreSQL, including concurrent submissions.
+- Failed runs and expired/missing outputs cannot satisfy a successful-result lookup.
+  Artifact retention and fingerprint invalidation are explicit lifecycle behavior.
+- Keep result lookup behind a focused application boundary, separate from routes
+  and adapters. Initially use indexed PostgreSQL lookups and persistent artifacts.
 
-The API, worker, Keycloak, Kafka, PostgreSQL, storage, and model containers are separately deployable components. They may live in one repository initially, but they must not be packaged into one container. Keycloak is an infrastructure dependency rather than a MIC3 business microservice and owns its own schema/database. It may share a PostgreSQL server initially, but not MIC3's database or database user.
+Redis may later cache fingerprint-to-run lookups, summaries/parsed views, or serve
+distributed rate limiting when justified. It does not replace Kafka, PostgreSQL,
+or output storage. Disposable result-cache misses fall back to durable data;
+authorization and execution correctness must not depend on cache availability.
+Adding Redis still requires invalidation, expiry, memory/failure policies, and
+tests. Do not introduce an unused generic cache framework now.
 
-The API owns HTTP validation, synchronous application operations, run creation, cache checks, and result retrieval. The worker owns execution orchestration, Kubernetes interaction, run-state updates, and asynchronous artifact processing. Kubernetes schedules model Jobs, applies resource limits, isolates executions, and reports whether a Job is pending, running, completed, or failed. The API service account must not receive Job-creation permission; the worker receives only the minimum required RBAC.
+## Identity and security
 
-Model-specific request/configuration translation, execution orchestration, and artifact interpretation remain distinct concerns. Model adapters do not need to be services on day one and should not become a large abstraction before a real model contract stabilizes.
+Keycloak owns credentials and its separate database; MIC3 depends on OIDC
+standards, not Keycloak-specific APIs or tables. The API validates JWT signature,
+issuer, audience, and expiry using externally configured discovery/signing keys.
+Internal UUID users map unique `(issuer, subject)` identities; email is mutable
+profile data. JIT provisioning grants only `member`. Bootstrap administrators
+through controlled commands/configuration and enforce local roles/ownership.
 
-The central API should not treat output folders as the source of truth. Output folders and object storage hold the raw files. The platform database stores the run metadata, status, cache key, artifact list, storage paths, checksums, and any normalized result metadata. This allows the platform to support models that output Excel, CSV, GeoJSON, NetCDF, SQLite, PDFs, images, logs, or custom folder structures.
-
-Kubernetes is useful for repeatable deployment, load balancing, resource limits, and running each model execution as a
-job that can be tracked as running, completed, or failed. It does not replace model adapters, artifact indexing, or
-semantic caching. If managed Kubernetes or OKD is available, it should be preferred. If not, the same platform concept
-can start with Docker-based workers and move to Kubernetes later.
-
-## Run Lifecycle
-
-1. A user requests a model run through the main API.
-2. The API validates the request and normalizes it into a platform run definition.
-3. The platform computes a cache key from the model name, model version, adapter version, input dataset version,  scenario parameters, and config version.
-4. If a matching completed run already exists, the API returns the existing run and artifacts instead of starting a new model execution.
-5. If no cached run exists, the API creates a pending run and a `run.requested` outbox record in one PostgreSQL transaction.
-6. An outbox publisher publishes a small event envelope to Kafka after the transaction commits. The event identifies the run; it does not carry the complete application state or file content.
-7. A worker consumes the message, loads the authoritative run configuration from PostgreSQL, and creates a Kubernetes Job.
-8. The worker updates run state in PostgreSQL as the Job becomes pending, running, completed, or failed. Consumers must be idempotent because messages can be delivered more than once.
-9. The model writes outputs to a deterministic run workspace. The worker validates required outputs, promotes artifacts into managed storage, and indexes their metadata.
-10. Completion/failure and later artifact-processing side effects may be published through the same outbox pattern. Users retrieve durable state and results through the API.
-
-## Synchronous and Event-Driven Boundaries
-
-Event-driven architecture is selective, not universal.
-
-| Operation | Primary path |
-| --- | --- |
-| Login and token issuance | Browser to Keycloak; synchronous redirect flow |
-| Token validation and authorization | FastAPI validates JWT; synchronous |
-| Reads and ordinary CRUD/metadata edits | FastAPI to PostgreSQL; synchronous |
-| Start a model execution | FastAPI to PostgreSQL/outbox to Kafka to worker |
-| Run completion or failure | Worker to PostgreSQL/outbox; event-driven reactions |
-| File upload | Bytes to object storage, metadata to PostgreSQL; optional event for processing |
-| Artifact processing, reports, notifications | Event-driven when asynchronous work is justified |
-
-Large files must never be sent through Kafka. Messages should contain stable identifiers such as `run_id` or `file_id`, and consumers should retrieve authoritative state from PostgreSQL or objects from storage.
-
-## Authentication and Authorization
-
-MIC3 is an OIDC/OAuth2 resource server and must not implement password storage, password resets, MFA, or its own `/login` endpoint. Keycloak initially supports local development users and provides the hosted login, registration, and account-management pages. It can later broker upstream Google, GitHub, institutional, or EOSC/MyAccessID providers without changing FastAPI's token contract.
-
-FastAPI validates JWT signature, issuer, audience, and expiry using provider discovery/signing keys. Provider-specific values are supplied through configuration such as `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, and `OIDC_CLIENT_ID`. The design must remain provider-independent so a direct EOSC OIDC integration remains possible.
-
-MIC3 keeps an application user profile keyed by the external issuer/subject identity for ownership and authorization, but stores no passwords or refresh tokens. Start with simple roles/scopes and resource ownership; do not build a general permission engine prematurely.
-
-## Output Handling
-
-Modeling teams are not required to produce a database. They may produce any file-based outputs that are useful for their model, including spreadsheets, geospatial files, reports, images, logs, or domain-specific formats.
-
-The platform handles outputs in two stages:
-
-- Artifact indexing: every completed run gets an indexed list of files, storage paths, file types, sizes, checksums, and semantic roles where known.
-- Semantic extraction: adapters optionally parse selected outputs into normalized tables or API views when the platform needs filtered, comparable, or dashboard-ready results.
-
-The platform should store all important artifacts, but it should only normalize the outputs that have clear product or scientific value. This avoids forcing every model output into a shared schema too early.
-
-## Caching
-
-Caching should be based on a deterministic key derived from meaningful inputs, not just the model name. A cached result is valid only when the request, model image or version, adapter version, input dataset version, config version, and scenario parameters match a previous completed run.
-
-Successful runs can be reused for repeated requests. Failed runs should keep logs for debugging but should not satisfy cache hits. Retention rules should decide how long completed artifacts, failed logs, and intermediate files are kept.
-
-## Requirements For Modeling Teams
-
-Each modeling team should provide the following:
-
-- A Docker image or Dockerfile for the model.
-- One documented non-interactive command that runs the model to completion.
-- A machine-readable configuration format or a template that the platform can fill in. (.toml files could be used here)
-- Clear required inputs and a way to identify the input data.
-- A deterministic output directory inside the container.
-- Success and failure expectations, including process exit code behavior, required output files, and known failure modes.
-- An output artifact contract that describes expected file names or patterns, artifact types, scientifically meaningful outputs, user-facing outputs, units, and important dimensions.
-- Approximate resource expectations, including CPU, memory, runtime, storage, and whether concurrent runs are safe.
-
-Optional:
-
-- A `manifest.json` file describing produced artifacts.
-- A sample config file.
-- A sample output folder.
-- A minimal smoke-test run that finishes quickly.
-
-## Example Model Contract
-
-```yaml
-model_name: forecast-sites
-image: registry.example.org/models/forecast-sites:1.0.0
-run_command: python src/main.py 
-config_mount_path: /app/src/simulation_options.toml
-output_directory: /outputs
-required_inputs:
-  - basque_case_study.sqlite
-required_artifacts:
-  - output.sqlite
-artifact_patterns:
-  - "*.xlsx"
-  - "*.geojson"
-  - "*.sqlite"
-success:
-  exit_code: 0
-  required_files_exist: true
-resources:
-  cpu: "2-4"
-  memory: "8-16 GB"
-  expected_runtime: "minutes to hours depending on scenario size"
-```
-
-## Success Criteria
-
- A successful first version can:
-
-- Register multiple models through adapters.
-- Start model runs from one API.
-- Track run status reliably.
-- Reuse cached completed runs when inputs match.
-- Store and index artifacts independently of each model's internal output format.
-- Expose downloads and selected normalized views through the platform API.
-- Add new models by adding a Docker image, model contract, and adapter.
-
-## Delivery Sequence
-
-1. Deploy the minimal FastAPI service and verify `/health`, `/docs`, and `/openapi.json` on EOSC/OKD.
-2. Validate a trivial Kubernetes Job manually, including scheduling, logs, status, and resource limits.
-3. Add PostgreSQL, SQLAlchemy, Alembic, an initial user profile, OIDC token validation, `/users/me`, and local Keycloak.
-4. Add the Kafka contract, transactional outbox, publisher, and separately deployed worker.
-5. Prove the complete path with a trivial run: API transaction to Kafka to worker-owned Kubernetes Job to persisted final status.
-6. Add real model contracts, adapters, caching, and artifact processing only after the platform path is validated.
+MIC3 stores no passwords or access/refresh tokens. Missing/invalid identity yields
+`401`, insufficient permission `403`. Keep `/health` public and dependency-free;
+`/ready` represents PostgreSQL readiness. Other identity providers can be brokered
+later without changing the API's identity boundary. Use environment configuration
+and Secrets, never embedded hosts, credentials, or private keys.
