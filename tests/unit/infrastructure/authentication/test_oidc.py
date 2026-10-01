@@ -265,3 +265,45 @@ def test_reports_unusable_signing_keys_as_provider_unavailable(
 
     with pytest.raises(IdentityProviderUnavailableError):
         _validator(oidc_server).validate(token)
+
+
+def test_signed_external_admin_claims_never_elevate_login(oidc_server):
+    from contextlib import nullcontext
+    from dataclasses import replace
+    from uuid import uuid4
+    from mic3_api.application.users import ResolveCurrentUser, UserAccount
+
+    class Accounts:
+        account = None
+
+        def find_by_identity(self, issuer, subject):
+            return self.account
+
+        def create_with_identity_and_role(self, identity, role_name):
+            self.account = UserAccount(
+                uuid4(), identity.email, identity.display_name, True,
+                frozenset({role_name}),
+            )
+            return self.account
+
+        def update_profile(self, account, updates):
+            self.account = replace(account, email=updates.email or account.email,
+                                   display_name=updates.display_name or account.display_name)
+            return self.account
+
+    accounts = Accounts()
+    uow = SimpleNamespace(users=accounts, transaction=nullcontext)
+    validator = _validator(oidc_server)
+    resolver = ResolveCurrentUser()
+    for name in ["local_admin", "master_admin"]:
+        identity = validator.validate(_token(oidc_server, claims={
+            "name": name, "preferred_username": name, "roles": ["admin"],
+            "realm_access": {"roles": ["admin", "realm-admin"]},
+            "resource_access": {"mic3-api": {"roles": ["admin"]}},
+        }))
+        assert resolver.execute(identity, uow).roles == ("member",)
+    accounts.account = replace(accounts.account, roles=frozenset({"member", "admin"}))
+    identity = validator.validate(_token(oidc_server, claims={"name": "Updated profile"}))
+    current = resolver.execute(identity, uow)
+    assert current.display_name == "Updated profile"
+    assert current.roles == ("admin", "member")
