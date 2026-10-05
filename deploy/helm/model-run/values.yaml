@@ -1,0 +1,26 @@
+# Supply model-specific values, e.g. integrations/eu_mfa/values.yaml.
+model:
+  id: ""
+  mode: ""
+  image: ""
+  command: []
+  workingDir: ""
+  outputPath: ""
+  resources:
+    requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+    limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 2Gi}
+imagePullSecrets: [ghcr-pull]
+nodeSelector:
+  kubernetes.io/os: linux
+  kubernetes.io/arch: amd64
+activeDeadlineSeconds: 600
+outputSizeLimit: 1Gi
+storage:
+  endpoint: http://mic3-aistor:9000
+  bucket: mic3-artifacts
+  secret: mic3-artifact-uploader-credentials
+copy:
+  image: quay.io/minio/aistor/mc@sha256:23511e340cbabf07e6a8b53f9c434975708f22f3c047d6beeddc17bf1a5aed88
+  resources:
+    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 1Gi}
+    limits: {cpu: 500m, memory: 256Mi, ephemeral-storage: 2Gi}

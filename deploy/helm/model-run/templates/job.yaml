@@ -1,0 +1,88 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: {{ required "model.id is required" .Values.model.id | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.model.id | quote }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: model
+          image: {{ required "model.image is required" .Values.model.image | quote }}
+          imagePullPolicy: IfNotPresent
+          workingDir: {{ required "model.workingDir is required" .Values.model.workingDir | quote }}
+          command: {{ required "model.command is required" .Values.model.command | toJson }}
+          resources:
+            {{- toYaml .Values.model.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: outputs
+              mountPath: {{ required "model.outputPath is required" .Values.model.outputPath | quote }}
+      containers:
+        - name: copy
+          image: {{ .Values.copy.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -c]
+          args:
+            - |
+              {{- .Files.Get "files/copy.sh" | nindent 14 }}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: MC_CONFIG_DIR, value: /tmp/mc}
+            - name: S3_ENDPOINT
+              value: {{ .Values.storage.endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.storage.bucket | quote }}
+            - name: MODEL_ID
+              value: {{ .Values.model.id | quote }}
+            - name: MODEL_MODE
+              value: {{ required "model.mode is required" .Values.model.mode | quote }}
+            - name: JOB_NAME
+              value: {{ .Release.Name | quote }}
+            - name: POD_UID
+              valueFrom:
+                fieldRef: {fieldPath: metadata.uid}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.storage.secret }}, key: AWS_ACCESS_KEY_ID}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.storage.secret }}, key: AWS_SECRET_ACCESS_KEY}
+          resources:
+            {{- toYaml .Values.copy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: outputs, mountPath: /outputs, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
+      volumes:
+        - name: outputs
+          emptyDir:
+            sizeLimit: {{ .Values.outputSizeLimit | quote }}
+        - name: temporary
+          emptyDir: {sizeLimit: 64Mi}

@@ -1,0 +1,16 @@
+name: mic3-aistor
+image: quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3
+clientImage: quay.io/minio/aistor/mc@sha256:23511e340cbabf07e6a8b53f9c434975708f22f3c047d6beeddc17bf1a5aed88
+serverSecret: mic3-aistor-credentials
+transferSecret: mic3-artifact-uploader-credentials
+bucket: mic3-artifacts
+policyName: mic3-artifact-upload
+persistence:
+  storageClass: standard
+  size: 5Gi
+resources:
+  requests: {cpu: 250m, memory: 512Mi}
+  limits: {cpu: "1", memory: 2Gi}
+bootstrapResources:
+  requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 64Mi}
+  limits: {cpu: 500m, memory: 256Mi, ephemeral-storage: 128Mi}

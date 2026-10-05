@@ -9,7 +9,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
-Execution, Kafka, adapters, and result reuse are not yet implemented.
+Integrated execution, Kafka, model integrations, and result reuse are not yet implemented.
+The shared-PVC storage choice below is provisional while a Helm-managed AIStor
+and MinIO Client copy path is qualified; see local project status for evidence and next steps.
 
 ## Components and boundaries
 
@@ -44,16 +46,35 @@ flowchart LR
   dependencies. API, worker, model images, and infrastructure remain separately
   deployable even if maintained in one repository.
 - **Persistent artifact storage** holds raw files and retained logs; PostgreSQL
-  indexes their locations, sizes, checksums, and meaning where known. Choose PVC
-  or object storage during execution integration; API-local disk is not durable
-  storage. Normalize only outputs with a concrete product/scientific use.
+  indexes their locations, sizes, checksums, and meaning where known. Start with
+  one `shared`/ReadWriteMany PVC across models, with isolated run/attempt
+  directories. A trusted platform component prepares directories; model Jobs
+  mount only their assigned output directory, and the API mounts artifacts
+  read-only. Record a storage identifier plus relative path to permit later
+  separation. Capacity admission, retention, and backups remain explicit concerns;
+  folders do not enforce per-model quotas. Managed object storage is not available
+  through the documented/current EOSC project allocation; use shared storage.
+  API-local disk is not durable storage. Normalize only outputs with a concrete
+  product/scientific use. Downloads authorize artifact IDs through PostgreSQL,
+  constrain resolved paths to artifact storage, and remain synchronous.
 
 ## Model integration contract
 
-Default to one adapter per integrated model. An adapter validates model-specific
-requests, prepares configuration/input bindings, and interprets expected outputs.
-Keep those responsibilities distinct from scheduling, messaging, storage access,
-and shared result-reuse decisions. Adapters need not be separate services.
+Use one **model integration** per model. It validates requests and prepares
+configuration/input bindings and invocation. A **result interpreter** identifies
+and validates expected outputs. An **execution backend** launches and observes
+Jobs. Reserve **data adapter** for future transformations between models, including
+units, dimensions, and formats, with source provenance and transformation versions.
+Keep these responsibilities distinct from messaging, storage, and result reuse.
+Use focused protocols and data structures; no shared scientific base class or
+separate integration service is required.
+
+Each integration explicitly maps supported modes to commands, configuration,
+and expected output paths. Expose that supported-mode and parameter metadata
+through the API for frontend choices, using the same definitions for backend
+validation. Do not duplicate the supported-mode list in the frontend or accept
+arbitrary executable commands from requests. EU-MFA initially exposes buildings
+only; additional submodules require qualification before being advertised.
 
 The shared execution boundary describes model/image version, command and working
 directory, input references/versions, configuration, resource requirements, and
@@ -65,7 +86,7 @@ versions/snapshots or explicitly restricted result reuse.
 
 EU-MFA is the first integration target. Its YAML, CSV, Python/flodym types, and
 submodel selection remain inside its integration. Supporting buildings first
-does not introduce a buildings-specific public endpoint or require one adapter
+does not introduce a buildings-specific public endpoint or require one integration
 per submodel. Define abstractions from verified behavior, then test their
 independence from EU-MFA; do not prebuild a plugin framework.
 
@@ -122,8 +143,8 @@ may retain diagnostics longer, within explicit limits.
 ## Shared result reuse and optional Redis
 
 Persisting a result makes it retrievable; reuse avoids another equivalent model
-execution. Implement reuse once in the platform, with adapters supplying validated,
-normalized model inputs. Fingerprints include model image/version, adapter version,
+execution. Implement reuse once in the platform, with integrations supplying validated,
+normalized model inputs. Fingerprints include model image/version, integration version,
 input snapshots/content identities, effective configuration, and relevant seeds.
 Changing external data or stochastic behavior must not silently reuse stale results.
 
@@ -134,7 +155,7 @@ Changing external data or stochastic behavior must not silently reuse stale resu
 - Failed runs and expired/missing outputs cannot satisfy a successful-result lookup.
   Artifact retention and fingerprint invalidation are explicit lifecycle behavior.
 - Keep result lookup behind a focused application boundary, separate from routes
-  and adapters. Initially use indexed PostgreSQL lookups and persistent artifacts.
+  and integrations. Initially use indexed PostgreSQL lookups and persistent artifacts.
 
 Redis may later cache fingerprint-to-run lookups, summaries/parsed views, or serve
 distributed rate limiting when justified. It does not replace Kafka, PostgreSQL,
