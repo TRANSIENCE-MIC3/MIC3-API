@@ -10,6 +10,8 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 Integrated execution, Kafka, model integrations, and result reuse are not yet implemented.
+The shared-PVC storage choice below is provisional while a Helm-managed AIStor
+and MinIO Client copy path is qualified; see local project status for evidence and next steps.
 
 ## Components and boundaries
 
