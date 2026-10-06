@@ -1,4 +1,5 @@
-# Supply model-specific values, e.g. integrations/eu_mfa/values.yaml.
+# Supply catalog-derived values using the model-job-values operator command.
+runId: ""
 model:
   id: ""
   mode: ""

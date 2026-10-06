@@ -1,0 +1,17 @@
+{
+  "model_id": "eu-mfa",
+  "display_name": "EU-MFA",
+  "image_digest": "ghcr.io/transience-mic3/eu-mfa@sha256:a96dd9d7e548b4abe7d3992b905bb605fc1a5f9206a7f65e75d497aa29e9268b",
+  "execution_definition": {
+    "modes": {
+      "buildings": {
+        "arguments": [
+          "python",
+          "eumfa_buildings.py"
+        ],
+        "working_directory": "/opt/eu-mfa",
+        "output_directory": "/opt/eu-mfa/data/baseline_buildings/output"
+      }
+    }
+  }
+}

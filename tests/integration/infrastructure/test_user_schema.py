@@ -18,7 +18,10 @@ from mic3_api.infrastructure.persistence import (
 )
 
 
-APPLICATION_TABLES = {"users", "roles", "user_identities", "user_roles"}
+APPLICATION_TABLES = {
+    "users", "roles", "user_identities", "user_roles",
+    "models", "model_releases", "runs", "outbox_events",
+}
 MEMBER_DESCRIPTION = "Default non-elevated MIC3 member role."
 
 

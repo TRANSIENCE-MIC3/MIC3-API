@@ -58,13 +58,10 @@ spec:
               value: {{ .Values.storage.bucket | quote }}
             - name: MODEL_ID
               value: {{ .Values.model.id | quote }}
-            - name: MODEL_MODE
-              value: {{ required "model.mode is required" .Values.model.mode | quote }}
-            - name: JOB_NAME
-              value: {{ .Release.Name | quote }}
-            - name: POD_UID
-              valueFrom:
-                fieldRef: {fieldPath: metadata.uid}
+            - name: MODEL_IMAGE_SHA
+              value: {{ (splitList "@sha256:" .Values.model.image | last) | quote }}
+            - name: RUN_ID
+              value: {{ required "runId is required" .Values.runId | quote }}
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef: {name: {{ .Values.storage.secret }}, key: AWS_ACCESS_KEY_ID}

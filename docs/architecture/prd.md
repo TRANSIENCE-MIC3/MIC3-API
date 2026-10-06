@@ -9,9 +9,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
-Integrated execution, Kafka, model integrations, and result reuse are not yet implemented.
-The shared-PVC storage choice below is provisional while a Helm-managed AIStor
-and MinIO Client copy path is qualified; see local project status for evidence and next steps.
+The model catalog, EU-MFA parameter validation and atomic run/outbox submission
+are implemented. Integrated execution, Kafka and result reuse are not yet implemented.
+Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
+qualification remains open. See local project status for evidence and next steps.
 
 ## Components and boundaries
 
@@ -45,50 +46,64 @@ flowchart LR
 - **Scientific models** run in independent containers with their own language and
   dependencies. API, worker, model images, and infrastructure remain separately
   deployable even if maintained in one repository.
-- **Persistent artifact storage** holds raw files and retained logs; PostgreSQL
-  indexes their locations, sizes, checksums, and meaning where known. Start with
-  one `shared`/ReadWriteMany PVC across models, with isolated run/attempt
-  directories. A trusted platform component prepares directories; model Jobs
-  mount only their assigned output directory, and the API mounts artifacts
-  read-only. Record a storage identifier plus relative path to permit later
-  separation. Capacity admission, retention, and backups remain explicit concerns;
-  folders do not enforce per-model quotas. Managed object storage is not available
-  through the documented/current EOSC project allocation; use shared storage.
-  API-local disk is not durable storage. Normalize only outputs with a concrete
-  product/scientific use. Downloads authorize artifact IDs through PostgreSQL,
-  constrain resolved paths to artifact storage, and remain synchronous.
+- **Persistent artifact storage** uses self-hosted AIStor; no managed S3 service
+  was confirmed for this EOSC allocation. Only AIStor mounts its persistent PVC.
+  Model Jobs write to temporary `emptyDir`; a MinIO Client container copies the
+  output tree to isolated prefixes grouped by model and full image SHA. New manual
+  Jobs use `<model>/sha256-<digest>/<run-id>/outputs/`, making all runs
+  of an obsolete image removable under one prefix. The run ID belongs to MIC3,
+  not Kubernetes; Job/Pod identifiers are diagnostic metadata only. Existing objects
+  under the older layout are not moved by this change. PostgreSQL records artifact
+  references; authorized API downloads use object storage, not a shared mount.
+  Pod loss before copy can lose outputs; failed copies can leave partial objects.
+  Retention, backups, and admission limits remain explicit concerns. Logs are not
+  uploaded by this flow; their retention depends on Pods or cluster logging.
 
 ## Model integration contract
 
-Use one **model integration** per model. It validates requests and prepares
-configuration/input bindings and invocation. A **result interpreter** identifies
-and validates expected outputs. An **execution backend** launches and observes
-Jobs. Reserve **data adapter** for future transformations between models, including
-units, dimensions, and formats, with source provenance and transformation versions.
-Keep these responsibilities distinct from messaging, storage, and result reuse.
-Use focused protocols and data structures; no shared scientific base class or
-separate integration service is required.
+Model-specific execution choices live in the release's `execution_definition`
+JSONB document. It contains a `modes` map; each named mode defines arguments,
+working directory and output directory. EU-MFA initially declares buildings only.
+The application validates mode selection against that release's map and resolves
+its invocation. No Python class repeats EU-MFA's mode names or command paths.
+The contract is language-independent; it can describe Python or GAMS invocations.
+Scientific parameter binding and input-file preparation remain separate future
+integration behavior, added when concrete model requirements exist. Unknown
+request fields are rejected today rather than silently ignored.
 
-Each integration explicitly maps supported modes to commands, configuration,
-and expected output paths. Expose that supported-mode and parameter metadata
-through the API for frontend choices, using the same definitions for backend
-validation. Do not duplicate the supported-mode list in the frontend or accept
-arbitrary executable commands from requests. EU-MFA initially exposes buildings
-only; additional submodules require qualification before being advertised.
+Reserve **Model Adapter** for future transformations between models, including
+units, dimensions and formats with source provenance. Workflow orchestration
+will own dependencies and scheduling; workers own execution. Keep scientific
+dependencies out of the API and upstream source unchanged.
 
-The shared execution boundary describes model/image version, command and working
-directory, input references/versions, configuration, resource requirements, and
-expected artifact descriptors. It must not require a scientific Python base
-class, a universal configuration format, CSV inputs, DataFrames, or one output
-directory layout. Wrappers can adapt existing non-interactive programs without
-rewriting their scientific logic. Remote input retrieval must have reproducible
-versions/snapshots or explicitly restricted result reuse.
+The catalog separates `models` from `model_releases`. The pinned image reference
+identifies a model build; no separate display-version field is stored. Operator
+registration inserts a new model/image entry or updates its existing execution
+JSONB and model display name. There are no catalog revisions or update locks
+based on historical runs during this disposable-data stage. Updating the same
+image does not create another release. New image references create new releases.
+Registration does not implicitly delete runs, events or artifacts. Operators must
+remove incompatible old runs/outputs when changing catalog behavior; old run
+fingerprints are not recomputed. This deliberately does not promise historical
+replay after editing a release. Before workers/reuse consume old records, they
+must detect incompatible definitions or those records must be removed.
 
-EU-MFA is the first integration target. Its YAML, CSV, Python/flodym types, and
-submodel selection remain inside its integration. Supporting buildings first
-does not introduce a buildings-specific public endpoint or require one integration
-per submodel. Define abstractions from verified behavior, then test their
-independence from EU-MFA; do not prebuild a plugin framework.
+`integrations/eu_mfa/release.json` is maintained catalog input, not a runtime
+fallback. PostgreSQL is authoritative after explicit registration. The
+`model-job-values --run-id` operator command reads a persisted queued run and
+its catalog invocation and exports values for the manual Job chart. It rejects
+changed execution definitions whose fingerprint no longer matches the run.
+Separate model Helm values are no longer maintained. An example request lives under the integration's
+`examples` directory and is not used to drive tests or runtime validation.
+The public `GET /models` endpoint exposes each release's parameter metadata,
+including its modes, along with the release ID and pinned image reference.
+Metadata and submission validation derive from the same release definition.
+
+Runs store a release reference and effective parameters. Their fingerprint hashes
+the selected invocation, not unrelated modes in that release. Resource limits and
+Kubernetes settings remain operational configuration. No `model_operations`
+table or generic scientific configuration language is introduced; JSONB can be
+normalized later when actual model patterns justify it.
 
 Model onboarding must establish a pinned source/image, reproducible dependencies,
 one batch invocation, accepted inputs/configuration, expected outputs and failure
@@ -99,7 +114,18 @@ belongs with the model owners; a zero exit code alone is insufficient.
 
 The sequence below applies after authorization, validation, and reuse/admission
 checks determine that a new execution is required. Public request/response
-schemas will be defined in their implementation milestone.
+schemas will be defined in their implementation milestone. Save effective parameters
+and a model-release reference with the run; atomically insert an outbox event
+containing its ID. The publisher sends that event to Kafka; the worker loads the
+saved configuration and creates the Job. Kafka does not read PostgreSQL itself.
+
+Current submission uses internal `register-model-release`, `submit-run` and
+`show-run` commands. Runs have optional `requested_by` attribution to a MIC3 user;
+anonymous submissions require no synthetic account. Run and outbox inserts share
+one transaction. Events contain stable event/run IDs, type, creation time and a
+nullable publication time; there is no publisher yet. Identical submissions
+remain separate queued runs and events. Artifacts and public run endpoints
+follow with orchestration; attempt tracking is deferred. The CLI requires operator database access.
 
 ```mermaid
 sequenceDiagram
@@ -118,10 +144,17 @@ sequenceDiagram
     Worker->>DB: Load state and claim eligible work
     Worker->>Jobs: Create/recover Job when capacity allows
     Jobs-->>Worker: Execution status
-    Worker->>Storage: Validate and retain required outputs/logs
+    Jobs->>Storage: Copy output tree with mc
+    Worker->>Storage: Check required artifacts
     Worker->>DB: Persist outcome/artifact references + lifecycle outbox event
     Worker->>Jobs: Allow cleanup after required collection
 ```
+
+One run represents one execution. A failed execution marks that run failed;
+retrying submits a new run ID, even for identical inputs. Partial uploads stay
+under the failed run prefix and cannot satisfy result lookup. No resumption or
+multiple-attempt lifecycle is planned initially. Manual Job export does not
+launch work or update run status; do not launch the same run twice.
 
 Publication and consumption may repeat. Dispatch must remain idempotent across
 worker crashes and repeated events, including a crash between Job creation and
@@ -131,11 +164,12 @@ output collection. Do not report reusable success until required artifacts exist
 
 Bound admitted work and concurrent executions globally and per user. Queued runs
 remain durable platform work; do not create a Kubernetes Job for every waiting
-request. Apply configurable CPU, memory, temporary-storage, runtime, and retry
+request. Apply configurable CPU, memory, temporary-storage, runtime, and admission
 bounds. Cluster quotas are a final guard, not the admission policy.
 
 Completed Job/Pod objects are temporary diagnostics, not run history. Preserve
-outcomes, required artifacts, and useful bounded logs before automated cleanup.
+outcomes and required artifact references before automated cleanup. Durable log
+collection is separate work, not provided by the current copy flow.
 Choose cleanup/retention periods against throughput and object/storage quotas;
 retaining every completed Job for a day is not a universal default. Failed runs
 may retain diagnostics longer, within explicit limits.
@@ -144,9 +178,23 @@ may retain diagnostics longer, within explicit limits.
 
 Persisting a result makes it retrievable; reuse avoids another equivalent model
 execution. Implement reuse once in the platform, with integrations supplying validated,
-normalized model inputs. Fingerprints include model image/version, integration version,
-input snapshots/content identities, effective configuration, and relevant seeds.
-Changing external data or stochastic behavior must not silently reuse stale results.
+normalized model inputs. Initially fingerprints hash canonical JSON containing
+the model ID, digest-pinned image, selected invocation and effective
+parameters. Keys are sorted, separators fixed and non-finite numbers rejected.
+Release UUIDs, requester and timestamps are excluded. A
+non-unique PostgreSQL index supports later lookup; it does not prevent duplicate runs.
+No integration/parameter/fingerprint version columns are needed initially.
+Changing fingerprint rules later requires explicit invalidation or migration.
+EU-MFA's bundled inputs are covered by the image digest. External input content
+identities and relevant seeds must be included when such inputs are introduced;
+changing external data or stochastic behavior must not silently reuse stale results.
+
+The initial planned reuse policy shares qualified bundled-data results across all
+visitors, including anonymous visitors. `requested_by` is attribution, not an
+access policy. Future private inputs/results require visibility and authorization
+at both lookup and download boundaries. Actual reuse is deferred until after
+Kafka and durable artifact tracking; S3 stores files while PostgreSQL identifies
+matching computations. A matching fingerprint alone does not prove usable outputs.
 
 - Return an equivalent successful result only when its artifacts remain available
   and the requester is authorized to access it.
