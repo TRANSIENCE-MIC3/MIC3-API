@@ -2,4 +2,4 @@ apiVersion: v2
 name: model-run
 description: Batch model execution followed by MinIO Client artifact copy
 type: application
-version: 0.1.0
+version: 0.1.2

@@ -77,9 +77,11 @@ not commit source changes or trigger the API's tag-based release workflow.
 ## Object storage through Helm
 
 Follow the [deployment runbook](../../docs/setup-and-deployment.md#object-storage-and-model-jobs).
-[values.yaml](values.yaml) supplies the existing model image, buildings command,
-working directory, and output mount to the model-run chart. Other modes require
-separate qualification before being exposed.
+[release.json](release.json) is the maintained catalog input for the image and
+mode invocations. Registered PostgreSQL catalog entries supply model-run chart
+values through the operator export command. Other modes require separate
+qualification before adding them to the catalog. New uploads are grouped by
+model and full image digest for version-wide cleanup.
 
 The model writes into a Pod-local temporary volume. The official MinIO Client
 container copies the output tree to AIStor after the model exits successfully.

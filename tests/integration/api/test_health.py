@@ -41,6 +41,7 @@ def test_openapi_schema_contains_health_endpoints(
         assert "/health" in schema["paths"]
         assert "/ready" in schema["paths"]
         assert "/users/me" in schema["paths"]
+        assert "/models" in schema["paths"]
         bearer_schemes = {
             name
             for name, security_scheme in schema["components"][
@@ -55,5 +56,6 @@ def test_openapi_schema_contains_health_endpoints(
         ]
         assert "security" not in schema["paths"]["/health"]["get"]
         assert "security" not in schema["paths"]["/ready"]["get"]
+        assert "security" not in schema["paths"]["/models"]["get"]
         assert schema["info"]["title"] == "Integration Test API"
         assert schema["info"]["version"] == version("mic3-api")

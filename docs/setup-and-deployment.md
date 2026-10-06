@@ -103,19 +103,25 @@ After changing that Secret's root credentials, restart `deployment/mic3-aistor`
 and wait for rollout before rerunning Helm. Never delete the PVC to retry setup.
 
 The [model-run chart](../deploy/helm/model-run) renders individual Jobs, not Helm
-releases. Model-specific configuration lives in [EU-MFA values](../integrations/eu_mfa/values.yaml).
+releases. Model-specific configuration is registered from the
+[EU-MFA catalog input](../integrations/eu_mfa/release.json); export the chosen
+queued run as chart values. Replace `RUN_UUID` below with the ID returned
+by submission. Each run is executed once; a retry requires a new submission.
 In another terminal:
 
 ```powershell
-$runName = 'eu-mfa-buildings-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-helm template $runName ./deploy/helm/model-run -f integrations/eu_mfa/values.yaml | oc create -f -
+$runName = 'model-run-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+python -m mic3_api.cli model-job-values --run-id RUN_UUID | helm template $runName ./deploy/helm/model-run -f - | oc create -f -
 oc wait --for=condition=complete "job/$runName" --timeout=600s
 oc logs "job/$runName" -c model
 oc logs "job/$runName" -c copy
 ```
 
 The model writes into `emptyDir`; official `mc` copies the tree to
-`mic3-artifacts/<model>/<mode>/<job-name>/<pod-uid>/`. Only the copy container
+`mic3-artifacts/<model>/sha256-<full-image-digest>/<run-id>/outputs/`.
+All modes of a deprecated image share one cleanup prefix. This applies to new
+Jobs; existing objects keep their original prefixes. Deleting objects does not
+delete PostgreSQL run records. Only the copy container
 receives transfer credentials. New values affect new Jobs, not existing runs.
 Delete inspected Jobs with `oc delete job $runName`; temporary outputs and Pod
 logs disappear, uploaded objects remain. Failed copies can leave partial prefixes.
