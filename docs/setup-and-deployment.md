@@ -77,6 +77,50 @@ For manual EOSC operations, log in and select the intended project first.
 Preserve database credentials/PVCs; never silently rotate credentials against
 persisted databases. Keep secrets and user tokens out of Git and Actions logs.
 
+### Object storage and model Jobs
+
+[Object-storage chart](../deploy/helm/object-storage) manages AIStor, a retained
+5Gi PVC, and bucket/user bootstrap. It is independent of API releases; merging
+chart changes does not deploy them. Bump the affected `Chart.yaml` version when
+changing its templates/defaults; this is not an API version or Git release tag.
+
+Existing Secrets: `mic3-aistor-credentials` (`MINIO_ROOT_USER`,
+`MINIO_ROOT_PASSWORD`, `minio.license`), `mic3-artifact-uploader-credentials`
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), and `ghcr-pull` for model pulls.
+The transfer identity is shared across models and scoped to `mic3-artifacts`.
+Only bootstrap receives administrator credentials. Keep Secret values outside Git.
+
+From the repository root, with Helm installed and `oc` logged into the project:
+
+```powershell
+helm upgrade --install mic3-aistor ./deploy/helm/object-storage --wait --timeout 10m
+oc logs job/mic3-aistor-bootstrap -c configure
+oc port-forward service/mic3-aistor 9000:9000 9001:9001
+```
+
+Console: http://localhost:9001, using the server Secret's administrator credentials.
+After changing that Secret's root credentials, restart `deployment/mic3-aistor`
+and wait for rollout before rerunning Helm. Never delete the PVC to retry setup.
+
+The [model-run chart](../deploy/helm/model-run) renders individual Jobs, not Helm
+releases. Model-specific configuration lives in [EU-MFA values](../integrations/eu_mfa/values.yaml).
+In another terminal:
+
+```powershell
+$runName = 'eu-mfa-buildings-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+helm template $runName ./deploy/helm/model-run -f integrations/eu_mfa/values.yaml | oc create -f -
+oc wait --for=condition=complete "job/$runName" --timeout=600s
+oc logs "job/$runName" -c model
+oc logs "job/$runName" -c copy
+```
+
+The model writes into `emptyDir`; official `mc` copies the tree to
+`mic3-artifacts/<model>/<mode>/<job-name>/<pod-uid>/`. Only the copy container
+receives transfer credentials. New values affect new Jobs, not existing runs.
+Delete inspected Jobs with `oc delete job $runName`; temporary outputs and Pod
+logs disappear, uploaded objects remain. Failed copies can leave partial prefixes.
+Only AIStor mounts its PVC; Helm retains it on uninstall.
+
 ### MIC3 administrator access
 
 After migrations and first login, obtain the intended user's internal UUID from

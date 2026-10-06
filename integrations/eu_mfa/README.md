@@ -15,7 +15,7 @@ storage, with all 12 downloaded CSVs matching the baseline. Shared-storage
 concurrency across nodes was not tested. Those disposable Jobs/PVCs were removed.
 AIStor upload/download and file persistence after a Pod restart are user-confirmed;
 the Helm/mc buildings Job also completed on 2026-10-05, with copied files
-confirmed by the user. Remaining checks are listed in the Helm guide.
+confirmed by the user. Downloaded-file hashes, concurrency, and scoped permission checks remain open.
 
 Published image:
 `ghcr.io/transience-mic3/eu-mfa@sha256:a96dd9d7e548b4abe7d3992b905bb605fc1a5f9206a7f65e75d497aa29e9268b`
@@ -76,7 +76,7 @@ not commit source changes or trigger the API's tag-based release workflow.
 
 ## Object storage through Helm
 
-Follow the [Helm deployment and run guide](../../deploy/helm/README.md).
+Follow the [deployment runbook](../../docs/setup-and-deployment.md#object-storage-and-model-jobs).
 [values.yaml](values.yaml) supplies the existing model image, buildings command,
 working directory, and output mount to the model-run chart. Other modes require
 separate qualification before being exposed.

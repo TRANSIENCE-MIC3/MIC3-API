@@ -10,8 +10,8 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 Integrated execution, Kafka, model integrations, and result reuse are not yet implemented.
-The shared-PVC storage choice below is provisional while a Helm-managed AIStor
-and MinIO Client copy path is qualified; see local project status for evidence and next steps.
+Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
+qualification remains open. See local project status for evidence and next steps.
 
 ## Components and boundaries
 
@@ -45,24 +45,21 @@ flowchart LR
 - **Scientific models** run in independent containers with their own language and
   dependencies. API, worker, model images, and infrastructure remain separately
   deployable even if maintained in one repository.
-- **Persistent artifact storage** holds raw files and retained logs; PostgreSQL
-  indexes their locations, sizes, checksums, and meaning where known. Start with
-  one `shared`/ReadWriteMany PVC across models, with isolated run/attempt
-  directories. A trusted platform component prepares directories; model Jobs
-  mount only their assigned output directory, and the API mounts artifacts
-  read-only. Record a storage identifier plus relative path to permit later
-  separation. Capacity admission, retention, and backups remain explicit concerns;
-  folders do not enforce per-model quotas. Managed object storage is not available
-  through the documented/current EOSC project allocation; use shared storage.
-  API-local disk is not durable storage. Normalize only outputs with a concrete
-  product/scientific use. Downloads authorize artifact IDs through PostgreSQL,
-  constrain resolved paths to artifact storage, and remain synchronous.
+- **Persistent artifact storage** uses self-hosted AIStor; no managed S3 service
+  was confirmed for this EOSC allocation. Only AIStor mounts its persistent PVC.
+  Model Jobs write to temporary `emptyDir`; a MinIO Client container copies the
+  output tree to isolated run/attempt prefixes. PostgreSQL records artifact
+  references; authorized API downloads use object storage, not a shared mount.
+  Pod loss before copy can lose outputs; failed copies can leave partial objects.
+  Retention, backups, and admission limits remain explicit concerns. Logs are not
+  uploaded by this flow; their retention depends on Pods or cluster logging.
 
 ## Model integration contract
 
 Use one **model integration** per model. It validates requests and prepares
-configuration/input bindings and invocation. A **result interpreter** identifies
-and validates expected outputs. An **execution backend** launches and observes
+execution configuration. Start with a model identifier and model-owned parameters
+(`eu-mfa`, `mode: buildings`); each integration validates its supported fields.
+Scientific result interpretation remains a separate, deferred capability. An **execution backend** launches and observes
 Jobs. Reserve **data adapter** for future transformations between models, including
 units, dimensions, and formats, with source provenance and transformation versions.
 Keep these responsibilities distinct from messaging, storage, and result reuse.
@@ -76,13 +73,11 @@ validation. Do not duplicate the supported-mode list in the frontend or accept
 arbitrary executable commands from requests. EU-MFA initially exposes buildings
 only; additional submodules require qualification before being advertised.
 
-The shared execution boundary describes model/image version, command and working
-directory, input references/versions, configuration, resource requirements, and
-expected artifact descriptors. It must not require a scientific Python base
-class, a universal configuration format, CSV inputs, DataFrames, or one output
-directory layout. Wrappers can adapt existing non-interactive programs without
-rewriting their scientific logic. Remote input retrieval must have reproducible
-versions/snapshots or explicitly restricted result reuse.
+Initially the execution configuration contains the pinned image, command, working
+directory, output mount, and resource settings, resolved from trusted integration
+configuration. Treat outputs as files at known storage locations; do not require
+a shared scientific result class, universal input schema, or plugin framework.
+Add input bindings and result interpretation when concrete model requirements exist.
 
 EU-MFA is the first integration target. Its YAML, CSV, Python/flodym types, and
 submodel selection remain inside its integration. Supporting buildings first
@@ -99,7 +94,10 @@ belongs with the model owners; a zero exit code alone is insufficient.
 
 The sequence below applies after authorization, validation, and reuse/admission
 checks determine that a new execution is required. Public request/response
-schemas will be defined in their implementation milestone.
+schemas will be defined in their implementation milestone. Save parameters and
+resolved execution configuration with the run; atomically insert an outbox event
+containing its ID. The publisher sends that event to Kafka; the worker loads the
+saved configuration and creates the Job. Kafka does not read PostgreSQL itself.
 
 ```mermaid
 sequenceDiagram
@@ -118,7 +116,8 @@ sequenceDiagram
     Worker->>DB: Load state and claim eligible work
     Worker->>Jobs: Create/recover Job when capacity allows
     Jobs-->>Worker: Execution status
-    Worker->>Storage: Validate and retain required outputs/logs
+    Jobs->>Storage: Copy output tree with mc
+    Worker->>Storage: Check required artifacts
     Worker->>DB: Persist outcome/artifact references + lifecycle outbox event
     Worker->>Jobs: Allow cleanup after required collection
 ```
@@ -135,7 +134,8 @@ request. Apply configurable CPU, memory, temporary-storage, runtime, and retry
 bounds. Cluster quotas are a final guard, not the admission policy.
 
 Completed Job/Pod objects are temporary diagnostics, not run history. Preserve
-outcomes, required artifacts, and useful bounded logs before automated cleanup.
+outcomes and required artifact references before automated cleanup. Durable log
+collection is separate work, not provided by the current copy flow.
 Choose cleanup/retention periods against throughput and object/storage quotas;
 retaining every completed Job for a day is not a universal default. Failed runs
 may retain diagnostics longer, within explicit limits.
