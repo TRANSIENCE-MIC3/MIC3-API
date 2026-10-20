@@ -42,7 +42,7 @@ def test_local_kafka_topics_replay_and_persistent_recreation():
         run("run", "--rm", "kafka-init")
         # Repeated initialization must preserve the existing topics.
         run("run", "--rm", "kafka-init")
-        for topic in ("mic3.run-requests.v1", "mic3.run-events.v1"):
+        for topic in ("mic3.run.requests.v1", "mic3.run.events.v1"):
             description = kafka("kafka-topics", "--describe", "--topic", topic)
             assert "PartitionCount: 1" in description
             assert "ReplicationFactor: 1" in description
@@ -51,7 +51,7 @@ def test_local_kafka_topics_replay_and_persistent_recreation():
 
         payload = json.dumps({"event_id": str(uuid4()), "run_id": str(uuid4())})
         record = f"test-run:{payload}"
-        topic = "mic3.run-requests.v1"
+        topic = "mic3.run.requests.v1"
         kafka("kafka-console-producer", "--topic", topic,
               "--property", "parse.key=true", "--property", "key.separator=:",
               "--producer-property", "acks=all", input=record + "\n")
@@ -63,14 +63,14 @@ def test_local_kafka_topics_replay_and_persistent_recreation():
                            "--property", "key.separator=:")
             assert record in output.splitlines()
 
-        consume("first-reader")
-        consume("independent-reader")
+        consume("first.reader")
+        consume("independent.reader")
         before = run("exec", "-T", "kafka", "cat", "/var/lib/kafka/data/meta.properties")
         # Stronger than a process restart: replace the container but keep its volume.
         run("up", "-d", "--force-recreate", "--wait", "kafka", timeout=240)
         after = run("exec", "-T", "kafka", "cat", "/var/lib/kafka/data/meta.properties")
         assert before == after
-        consume("reader-after-recreation")
+        consume("reader.after.recreation")
     finally:
         # Only this uniquely named disposable test project is removed.
         subprocess.run([*compose, "down", "--volumes", "--remove-orphans"],

@@ -23,8 +23,12 @@ without ZooKeeper; this one process has both broker and controller roles.
 A **topic** is a named event stream. Each of our two topics has one **partition**,
 an ordered log, and one replica: there is no redundant copy on another broker.
 
-The initializer explicitly creates `mic3.run-requests.v1` and
-`mic3.run-events.v1`. Running it again leaves existing topics and settings intact;
+Kafka topic and consumer-group names use lowercase words separated only by periods.
+Kafka may still print its generic period/underscore metric warning for these names;
+we avoid the collision by never using underscores in topic names.
+
+The initializer explicitly creates `mic3.run.requests.v1` and
+`mic3.run.events.v1`. Running it again leaves existing topics and settings intact;
 it does not reconcile configuration changes. Automatic topic creation is disabled.
 Each topic retains data for up to seven days or approximately 1GiB per partition,
 whichever limit removes old segments first. Retention is asynchronous and
@@ -43,8 +47,8 @@ Use a separate learning topic so demonstration records cannot later launch work:
 ```powershell
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic mic3.learning --partitions 1 --replication-factor 1 --config retention.ms=86400000 --config retention.bytes=16777216
 'demo-run:hello-kafka' | docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:19092 --topic mic3.learning --property parse.key=true --property key.separator=: --producer-property acks=all
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning-reader-a --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning-reader-b --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning.reader.a --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning.reader.b --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
 ```
 
 A **record key** (`demo-run`) determines partition placement; our real events will
@@ -58,10 +62,10 @@ Console consumers use automatic commits; the future worker will commit explicitl
 only after durable database acceptance.
 
 ```powershell
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:19092 --describe --group learning-reader-a
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:19092 --describe --group learning.reader.a
 docker compose restart kafka
 docker compose up -d --wait kafka
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning-reader-after-restart --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:19092 --topic mic3.learning --group learning.reader.after.restart --from-beginning --max-messages 1 --timeout-ms 20000 --property print.key=true
 ```
 
 Expect `demo-run` and `hello-kafka` again after restart. On repeated walkthroughs,
