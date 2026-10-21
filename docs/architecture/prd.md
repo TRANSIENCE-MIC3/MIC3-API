@@ -10,7 +10,8 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
-are implemented. Integrated execution, Kafka and result reuse are not yet implemented.
+are implemented, together with local Kafka and outbox publication. Integrated
+execution and result reuse are not yet implemented.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
 
@@ -123,7 +124,10 @@ Current submission uses internal `register-model-release`, `submit-run` and
 `show-run` commands. Runs have optional `requested_by` attribution to a MIC3 user;
 anonymous submissions require no synthetic account. Run and outbox inserts share
 one transaction. Events contain stable event/run IDs, type, creation time and a
-nullable publication time; there is no publisher yet. Identical submissions
+nullable publication time. A separate publisher sends acknowledged, versioned
+`run.requested` records to Kafka and records publication in PostgreSQL; replay
+after acknowledgement but before database commit retains the same event ID.
+Identical submissions
 remain separate queued runs and events. Artifacts and public run endpoints
 follow with orchestration; attempt tracking is deferred. The CLI requires operator database access.
 

@@ -4,7 +4,8 @@ MIC3's FastAPI control plane for a platform that will execute independent
 scientific models. The current service provides PostgreSQL-backed profiles,
 Keycloak OIDC authentication, and local member/admin authorization, locally and
 on EOSC/OKD. A public model catalog and operator CLI support a configurable model
-release catalog and durable queued submissions. Automated model execution is planned,
+release catalog and durable queued submissions. A separate local outbox publisher
+forwards committed requests to Kafka. Automated model execution is planned,
 not yet implemented.
 
 ## Local quickstart

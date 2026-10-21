@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dynamic = ["dependencies"]
 
+[project.optional-dependencies]
+messaging = ["confluent-kafka==2.16.0"]
+
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 

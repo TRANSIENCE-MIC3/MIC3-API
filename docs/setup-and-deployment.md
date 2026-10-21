@@ -166,9 +166,8 @@ and `OIDC_MEMBER_ACCESS_TOKEN` for admin checks. Run the relevant files in
 
 ### Tests
 
-For the local Kafka broker, topic/consumer exercises and the isolated persistence
-test, see the [Kafka checkpoint](../deploy/local/kafka/README.md). Kafka currently
-has no publisher or worker connected to MIC3 submission.
+For local Kafka and publisher startup, see the
+[Kafka README](../deploy/local/kafka/README.md). Automated execution is not implemented yet.
 
 With Docker running: `python -m pytest tests/unit tests/integration`.
 Testcontainers uses disposable databases/Keycloak, separate from Compose/EOSC.
