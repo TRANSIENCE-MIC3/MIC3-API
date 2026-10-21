@@ -1,10 +1,11 @@
 """Validated catalog execution choices, independent of model language and transport."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
 
 from mic3_api.application.models.errors import ModelError
+from mic3_api.application.models.outputs import OutputRequirements
 
 
 def validate_key(value: object) -> str:
@@ -18,11 +19,13 @@ class Invocation:
     arguments: tuple[str, ...]
     working_directory: str
     output_directory: str
+    output_requirements: OutputRequirements = OutputRequirements()
 
     @classmethod
     def from_dict(cls, value: object) -> "Invocation":
         fields = {"arguments", "working_directory", "output_directory"}
-        if not isinstance(value, dict) or set(value) != fields:
+        if (not isinstance(value, dict) or not fields <= set(value)
+                or set(value) - fields - {"required_outputs"}):
             raise ModelError("Execution definition requires arguments, working_directory and output_directory.")
         arguments = value["arguments"]
         if not isinstance(arguments, list) or not arguments or any(
@@ -34,10 +37,19 @@ class Invocation:
             if (not isinstance(path, str) or "\0" in path
                     or not PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts):
                 raise ModelError("Execution directories must be absolute container paths.")
-        return cls(tuple(arguments), value["working_directory"], value["output_directory"])
+        return cls(tuple(arguments), value["working_directory"], value["output_directory"],
+                   OutputRequirements.from_list(value.get("required_outputs", [])))
+
+    def computation_dict(self) -> dict:
+        """Preserve the original fingerprint payload; output checks are not inputs."""
+        return {"arguments": list(self.arguments), "working_directory": self.working_directory,
+                "output_directory": self.output_directory}
 
     def to_dict(self) -> dict:
-        return {**asdict(self), "arguments": list(self.arguments)}
+        result = self.computation_dict()
+        if self.output_requirements.required_files:
+            result["required_outputs"] = list(self.output_requirements.required_files)
+        return result
 
 
 @dataclass(frozen=True)

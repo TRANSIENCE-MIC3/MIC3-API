@@ -37,6 +37,7 @@ class SqlAlchemyRunSubmissions:
                 "id": run.id, "model_release_id": run.model_release_id,
                 "requested_by": run.requested_by, "parameters": run.parameters,
                 "fingerprint": run.fingerprint, "status": run.status, "created_at": run.created_at,
+                "accepted_at": run.accepted_at, "failure_code": run.failure_code,
                 "events": [{"id": event.id, "event_type": event.event_type,
                             "created_at": event.created_at, "published_at": event.published_at}
                            for event in events],

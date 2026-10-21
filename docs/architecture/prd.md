@@ -10,7 +10,8 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
-are implemented, together with local Kafka and outbox publication. Integrated
+are implemented, together with local Kafka, outbox publication and a database-backed
+run acceptance use case. Integrated
 execution and result reuse are not yet implemented.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
@@ -64,7 +65,10 @@ flowchart LR
 
 Model-specific execution choices live in the release's `execution_definition`
 JSONB document. It contains a `modes` map; each named mode defines arguments,
-working directory and output directory. EU-MFA initially declares buildings only.
+working directory and output directory. Optional `required_outputs` lists exact
+relative file paths used for output verification; missing or empty lists are valid.
+These requirements are separate from computation identity. EU-MFA initially
+declares buildings only, without a required-output list.
 The application validates mode selection against that release's map and resolves
 its invocation. No Python class repeats EU-MFA's mode names or command paths.
 The contract is language-independent; it can describe Python or GAMS invocations.
@@ -80,14 +84,20 @@ dependencies out of the API and upstream source unchanged.
 The catalog separates `models` from `model_releases`. The pinned image reference
 identifies a model build; no separate display-version field is stored. Operator
 registration inserts a new model/image entry or updates its existing execution
-JSONB and model display name. There are no catalog revisions or update locks
-based on historical runs during this disposable-data stage. Updating the same
+JSONB and model display name. There are no catalog revisions or per-run execution
+snapshots. A mode's invocation and output requirements cannot be changed or removed
+while accepted queued/running runs reference it. Registration and acceptance take
+the same release-row lock to serialize that decision; acceptance locks the release
+before the run. Display names and unrelated modes remain editable. Terminal runs
+do not block edits. Updating the same
 image does not create another release. New image references create new releases.
 Registration does not implicitly delete runs, events or artifacts. Operators must
 remove incompatible old runs/outputs when changing catalog behavior; old run
 fingerprints are not recomputed. This deliberately does not promise historical
-replay after editing a release. Before workers/reuse consume old records, they
-must detect incompatible definitions or those records must be removed.
+replay after editing a release. Acceptance recomputes the saved fingerprint and
+marks incompatible queued runs failed with `execution_definition_changed`.
+Future dispatch must recheck compatibility too. Historical records are not
+silently migrated or resubmitted.
 
 `integrations/eu_mfa/release.json` is maintained catalog input, not a runtime
 fallback. PostgreSQL is authoritative after explicit registration. The
@@ -130,6 +140,20 @@ after acknowledgement but before database commit retains the same event ID.
 Identical submissions
 remain separate queued runs and events. Artifacts and public run endpoints
 follow with orchestration; attempt tracking is deferred. The CLI requires operator database access.
+
+Acceptance uses the existing `runs` record: nullable `accepted_at` records durable
+acceptance, and nullable `failure_code` records a controlled failure reason.
+It creates no separate execution identifier or specification JSON. Repeated
+acceptance returns the existing outcome; running/terminal runs are never made
+eligible again. A matching queued run stays queued after acceptance until a
+future dispatcher starts it. Database errors roll back without marking the run
+failed. Kafka consumption and Job dispatch are not implemented yet.
+
+Output verification will require successful model/upload completion and at least
+one nonempty uploaded file by default. Where `required_outputs` is supplied, all
+listed files must also exist and be nonempty; additional files are permitted.
+This checks artifact availability, not scientific correctness. Mandatory output
+lists and storage verification are not introduced by the acceptance checkpoint.
 
 ```mermaid
 sequenceDiagram

@@ -10,7 +10,7 @@ def fingerprint(release: ReleaseDefinition, parameters: dict) -> str:
     payload = {
         "model_id": release.model_id,
         "image_digest": release.image_digest,
-        "execution_definition": release.execution_definition.resolve({"mode": parameters["mode"]}).to_dict(),
+        "execution_definition": release.execution_definition.resolve({"mode": parameters["mode"]}).computation_dict(),
         "parameters": parameters,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
