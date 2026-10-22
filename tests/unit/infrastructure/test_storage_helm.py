@@ -95,6 +95,22 @@ def test_configurable_bucket_and_deadline():
     assert job["spec"]["activeDeadlineSeconds"] == 3600
 
 
+def test_local_overrides_keep_shared_secret_contract_and_reader_is_read_only():
+    docs = render("object-storage", "-f", str(ROOT / "deploy/local/object-storage.values.yaml"))
+    service = next(d for d in docs if d["kind"] == "Service")
+    assert service["spec"]["type"] == "NodePort"
+    assert [p["nodePort"] for p in service["spec"]["ports"]] == [30900, 30901]
+    deployment = next(d for d in docs if d["kind"] == "Deployment")
+    assert deployment["spec"]["template"]["spec"]["securityContext"]["runAsUser"] == 1000
+    cm = next(d for d in docs if d["kind"] == "ConfigMap")
+    policy = json.loads(cm["data"]["read-policy.json"])
+    actions = {a for statement in policy["Statement"] for a in statement["Action"]}
+    assert actions == {"s3:GetBucketLocation", "s3:ListBucket", "s3:GetObject"}
+    job = next(d for d in docs if d["kind"] == "Job")
+    refs = {v["valueFrom"]["secretKeyRef"]["name"] for v in job["spec"]["template"]["spec"]["containers"][0]["env"] if "valueFrom" in v}
+    assert refs == {"mic3-aistor-credentials", "mic3-artifact-uploader-credentials", "mic3-artifact-reader-credentials"}
+
+
 @pytest.mark.parametrize("override", ["model.mode=../escape", "model.image=example:latest", "runId=../escape", "runId="])
 def test_invalid_run_values_are_rejected(override):
     with pytest.raises(subprocess.CalledProcessError):

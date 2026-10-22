@@ -25,6 +25,9 @@ spec:
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       securityContext:
+        {{- with .Values.podIdentity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       initContainers:

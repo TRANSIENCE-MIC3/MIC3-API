@@ -46,3 +46,7 @@ __pycache__/
 
 # Local environment configuration
 /.env
+/deploy/local/bin/
+/deploy/local/kubeconfig
+/deploy/local/secrets/
+/deploy/local/evidence/

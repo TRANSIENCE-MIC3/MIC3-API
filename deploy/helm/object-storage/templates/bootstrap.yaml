@@ -7,6 +7,8 @@ data:
     {{- .Files.Get "files/bootstrap.sh" | nindent 4 }}
   upload-policy.json: |
     {{- tpl (.Files.Get "files/upload-policy.json") . | nindent 4 }}
+  read-policy.json: |
+    {{- tpl (.Files.Get "files/read-policy.json") . | nindent 4 }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -26,6 +28,9 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       securityContext:
+        {{- with .Values.podIdentity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       containers:
@@ -34,6 +39,15 @@ spec:
           imagePullPolicy: IfNotPresent
           command: [/bin/sh, /bootstrap/bootstrap.sh]
           env:
+            {{- if .Values.reader.enabled }}
+            - name: READER_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.reader.secret }}, key: AWS_ACCESS_KEY_ID}
+            - name: READER_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.reader.secret }}, key: AWS_SECRET_ACCESS_KEY}
+            - {name: READER_POLICY_NAME, value: {{ .Values.reader.policyName | quote }}}
+            {{- end }}
             - {name: HOME, value: /tmp}
             - {name: MC_CONFIG_DIR, value: /tmp/mc}
             - name: S3_ENDPOINT

@@ -1,5 +1,6 @@
 # Supply catalog-derived values using the model-job-values operator command.
 runId: ""
+podIdentity: {}
 model:
   id: ""
   mode: ""

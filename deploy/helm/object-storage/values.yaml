@@ -5,6 +5,12 @@ serverSecret: mic3-aistor-credentials
 transferSecret: mic3-artifact-uploader-credentials
 bucket: mic3-artifacts
 policyName: mic3-artifact-upload
+podIdentity: {}
+service: {type: ClusterIP}
+reader:
+  enabled: false
+  secret: mic3-artifact-reader-credentials
+  policyName: mic3-artifact-read
 persistence:
   storageClass: standard
   size: 5Gi
