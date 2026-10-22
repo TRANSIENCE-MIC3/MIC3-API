@@ -54,6 +54,11 @@ class Database:
         with self._engine.connect() as connection:
             connection.execute(text("SELECT 1"))
 
+    @property
+    def engine(self):
+        """Execution repositories own their own short sessions and lock connections."""
+        return self._engine
+
     def dispose(self) -> None:
         """Close all connections held by the engine pool."""
         self._engine.dispose()

@@ -64,7 +64,9 @@ def test_model_copy_is_sequential_isolated_and_not_a_helm_release_hook(mode):
     docs = render("model-run", mode=mode)
     job, = docs
     assert job["kind"] == "Job"
-    assert not job["metadata"].get("annotations")
+    assert "helm.sh/hook" not in job["metadata"].get("annotations", {})
+    assert job["metadata"]["name"] == f"mic3-run-{RUN_ID}"
+    assert len(job["metadata"]["annotations"]["mic3.io/fingerprint"]) == 64
     assert job["spec"]["backoffLimit"] == 0
     assert "ttlSecondsAfterFinished" not in job["spec"]
     pod = job["spec"]["template"]["spec"]

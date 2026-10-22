@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, Uuid, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Text, Uuid, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +38,7 @@ class Run(Base):
         CheckConstraint("fingerprint ~ '^[0-9a-f]{64}$'", name="fingerprint_sha256"),
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="status"),
         Index("ix_runs_fingerprint", "fingerprint"),
+        Index("ix_runs_dispatch", "created_at", "id", postgresql_where=text("accepted_at IS NOT NULL AND status IN ('queued', 'running')")),
         Index("ix_runs_requested_by_created_at", "requested_by", "created_at"),
     )
 
@@ -49,7 +50,20 @@ class Run(Base):
     status: Mapped[str] = mapped_column(Text)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_code: Mapped[str | None] = mapped_column(Text)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    job_namespace: Mapped[str | None] = mapped_column(Text)
+    job_uid: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RunArtifact(Base):
+    __tablename__ = "run_artifacts"
+    __table_args__ = (CheckConstraint("size_bytes >= 0", name="artifact_size_nonnegative"),)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("runs.id", ondelete="RESTRICT"), primary_key=True)
+    object_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    bucket: Mapped[str] = mapped_column(Text)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
 
 
 class OutboxEvent(Base):

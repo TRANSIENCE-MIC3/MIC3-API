@@ -1,4 +1,4 @@
--e .[messaging]
+-e .[messaging,execution]
 
 httpx2>=2.0,<3.0
 pytest>=8.3,<10.0
