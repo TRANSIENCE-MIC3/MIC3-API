@@ -110,8 +110,9 @@ by submission. Each run is executed once; a retry requires a new submission.
 In another terminal:
 
 ```powershell
-$runName = 'model-run-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-python -m mic3_api.cli model-job-values --run-id RUN_UUID | helm template $runName ./deploy/helm/model-run -f - | oc create -f -
+$runId = 'RUN_UUID'
+$runName = "mic3-run-$runId"
+python -m mic3_api.cli model-job-values --run-id $runId | helm template $runName ./deploy/helm/model-run -f - | oc create -f -
 oc wait --for=condition=complete "job/$runName" --timeout=600s
 oc logs "job/$runName" -c model
 oc logs "job/$runName" -c copy
@@ -123,7 +124,9 @@ All modes of a deprecated image share one cleanup prefix. This applies to new
 Jobs; existing objects keep their original prefixes. Deleting objects does not
 delete PostgreSQL run records. Only the copy container
 receives transfer credentials. New values affect new Jobs, not existing runs.
-Delete inspected Jobs with `oc delete job $runName`; temporary outputs and Pod
+For worker-managed runs, wait until `show-run` records the terminal outcome and
+artifact references before deleting a Job. Delete inspected Jobs with
+`oc delete job $runName`; temporary outputs and Pod
 logs disappear, uploaded objects remain. Failed copies can leave partial prefixes.
 Only AIStor mounts its PVC; Helm retains it on uninstall.
 
@@ -167,7 +170,9 @@ and `OIDC_MEMBER_ACCESS_TOKEN` for admin checks. Run the relevant files in
 ### Tests
 
 For local Kafka and publisher startup, see the
-[Kafka README](../deploy/local/kafka/README.md). Automated execution is not implemented yet.
+[Kafka README](../deploy/local/kafka/README.md). The optional `worker --execute`
+mode dispatches Jobs and verifies artifacts against configured Kubernetes/AIStor.
+Local kind acceptance is opt-in; EOSC execution deployment remains pending.
 
 With Docker running: `python -m pytest tests/unit tests/integration`.
 Testcontainers uses disposable databases/Keycloak, separate from Compose/EOSC.

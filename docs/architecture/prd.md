@@ -11,8 +11,8 @@ from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
 are implemented, together with local Kafka, outbox publication and a database-backed
-run acceptance use case and Kafka acceptance worker. Integrated
-execution and result reuse are not yet implemented.
+run acceptance and an optional execution worker. Local Kubernetes execution and
+artifact persistence are implemented; EOSC execution deployment and result reuse remain pending.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
 
@@ -100,7 +100,7 @@ remove incompatible old runs/outputs when changing catalog behavior; old run
 fingerprints are not recomputed. This deliberately does not promise historical
 replay after editing a release. Acceptance recomputes the saved fingerprint and
 marks incompatible queued runs failed with `execution_definition_changed`.
-Future dispatch must recheck compatibility too. Historical records are not
+Dispatch rechecks compatibility too. Historical records are not
 silently migrated or resubmitted.
 
 `integrations/eu_mfa/release.json` is maintained catalog input, not a runtime
@@ -141,23 +141,32 @@ one transaction. Events contain stable event/run IDs, type, creation time and a
 nullable publication time. A separate publisher sends acknowledged, versioned
 `run.requested` records to Kafka and records publication in PostgreSQL; replay
 after acknowledgement but before database commit retains the same event ID.
-Identical submissions
-remain separate queued runs and events. Artifacts and public run endpoints
-follow with orchestration; attempt tracking is deferred. The CLI requires operator database access.
+Identical submissions remain separate queued runs and events. Terminal
+`run.succeeded`/`run.failed` events use `mic3.run.events.v1`; requests use
+`mic3.run.requests.v1`. Public run endpoints and attempt tracking are deferred.
+The CLI requires operator database access.
 
 Acceptance uses the existing `runs` record: nullable `accepted_at` records durable
 acceptance, and nullable `failure_code` records a controlled failure reason.
 It creates no separate execution identifier or specification JSON. Repeated
 acceptance returns the existing outcome; running/terminal runs are never made
 eligible again. A matching queued run stays queued after acceptance until a
-future dispatcher starts it. Database errors roll back without marking the run
-failed. Kafka consumption and Job dispatch are not implemented yet.
+dispatcher starts it. Database errors roll back without marking the run failed.
+The worker runs acceptance only by default; `--execute` also enables a supervised
+execution loop. PostgreSQL serializes capacity allocation (default one), protects
+per-run reconciliation, and stores dispatch intent before Job creation. Runs keep
+their namespace, Job UID and completion time; there are no execution snapshots.
+Jobs use `mic3-run-<run UUID>` and are adopted only after identity/specification
+checks. A missing recorded Job is a failure, never an automatic scientific rerun.
 
-Output verification will require successful model/upload completion and at least
+Output verification requires successful model/upload completion and at least
 one nonempty uploaded file by default. Where `required_outputs` is supplied, all
 listed files must also exist and be nonempty; additional files are permitted.
-This checks artifact availability, not scientific correctness. Mandatory output
-lists and storage verification are not introduced by the acceptance checkpoint.
+This checks artifact availability, not scientific correctness. The copy container
+skips transfer for an empty directory, leaving the worker to report the output
+contract failure. Read-only storage access supplies keys and sizes; ETags are not
+checksums. Terminal state, collected artifact references and a terminal outbox
+event commit together. Completed Jobs remain available for inspection.
 
 ```mermaid
 sequenceDiagram

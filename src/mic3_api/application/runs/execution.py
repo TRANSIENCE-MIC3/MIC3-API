@@ -1,5 +1,6 @@
 """Durable execution coordination; no Kubernetes, storage, or database imports."""
 from contextlib import AbstractContextManager
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
@@ -7,14 +8,17 @@ from uuid import UUID
 from mic3_api.application.models.catalog import ReleaseDefinition
 from mic3_api.application.runs.fingerprint import fingerprint
 
+LOG = logging.getLogger(__name__)
+
 
 class InfrastructureUnavailable(Exception):
     """Keep work recoverable and retry an infrastructure operation later."""
 
 
 class ExecutionFailure(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, artifacts=()):
         self.code = code
+        self.artifacts = artifacts
         super().__init__(code)
 
 
@@ -91,10 +95,13 @@ class ReconcileExecutions:
                 record.save_job_uid(observation.uid)
                 if observation.state == "failed":
                     record.finish(observation.failure_code or "job_failed")
+                    LOG.info("Execution failed run=%s reason=%s", work.id, observation.failure_code)
                 elif observation.state == "succeeded":
                     record.finish(None, self.outputs.collect(work))
+                    LOG.info("Execution succeeded run=%s", work.id)
             except ExecutionFailure as exc:
-                record.finish(exc.code)
+                record.finish(exc.code, exc.artifacts)
+                LOG.info("Execution failed run=%s reason=%s", work.id, exc.code)
 
     def tick(self) -> None:
         # Recover all existing work before allocating another slot.

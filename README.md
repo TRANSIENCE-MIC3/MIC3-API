@@ -6,8 +6,10 @@ Keycloak OIDC authentication, and local member/admin authorization, locally and
 on EOSC/OKD. A public model catalog and operator CLI support a configurable model
 release catalog and durable queued submissions. A separate local outbox publisher
 forwards committed requests to Kafka; a separate worker records durable acceptance
-or message rejection in PostgreSQL. Automated model execution is planned,
-not yet implemented.
+or message rejection in PostgreSQL. With `--execute`, the worker dispatches and
+recovers Kubernetes Jobs, verifies uploaded artifacts, and persists outcomes.
+Local kind/AIStor execution uses the same model and storage charts as EOSC;
+deployment of Kafka and the execution services on EOSC remains pending.
 
 ## Local quickstart
 

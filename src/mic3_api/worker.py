@@ -73,19 +73,29 @@ def run(database, consumer_factory, settings: WorkerSettings, stop: Event, *, on
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Accept Kafka run requests into PostgreSQL")
-    parser.add_argument("--once", action="store_true", help="Handle at most one record, or exit after the idle timeout")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="Handle at most one record, or exit after the idle timeout")
+    mode.add_argument("--execute", action="store_true", help="Also dispatch and reconcile accepted model Jobs")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     stop, previous, database = Event(), {}, None
     try:
-        settings = WorkerSettings()
+        if args.execute:
+            from mic3_api.core.execution_config import ExecutionSettings
+            settings = ExecutionSettings()
+        else:
+            settings = WorkerSettings()
         database = Database(settings.database_url,
                             statement_timeout_ms=settings.worker_statement_timeout_ms,
                             lock_timeout_ms=settings.worker_lock_timeout_ms)
         for sig in (signal.SIGINT, signal.SIGTERM):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
-        return run(database, lambda: KafkaRequestConsumer(settings.kafka_bootstrap_servers,
-                   settings.kafka_requests_topic, settings.kafka_consumer_group), settings, stop, once=args.once)
+        consumer_factory = lambda: KafkaRequestConsumer(settings.kafka_bootstrap_servers,
+                   settings.kafka_requests_topic, settings.kafka_consumer_group)
+        if args.execute:
+            from mic3_api.execution_runtime import run_with_execution
+            return run_with_execution(database, consumer_factory, settings, stop, run)
+        return run(database, consumer_factory, settings, stop, once=args.once)
     except Exception as exc:
         LOG.error("Worker initialization or shutdown failed (%s).", type(exc).__name__)
         return 1

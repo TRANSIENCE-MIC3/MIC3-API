@@ -10,6 +10,7 @@ from mic3_api.application.models.catalog import ReleaseDefinition
 from mic3_api.application.models.execution import ExecutionDefinition
 from mic3_api.application.runs.acceptance import RunForAcceptance, RunNotFound
 from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
+from mic3_api.infrastructure.persistence.run_outcomes import finish_row
 
 
 class SqlAlchemyAcceptanceTransaction:
@@ -24,7 +25,10 @@ class SqlAlchemyAcceptanceTransaction:
                                  ExecutionDefinition.from_dict(self._release.execution_definition))
 
     def save_outcome(self, run: RunForAcceptance) -> None:
-        self._row.status = run.status
+        if run.status == "failed":
+            finish_row(self._session, self._row, run.failure_code)
+        else:
+            self._row.status = run.status
         self._row.accepted_at = run.accepted_at
         self._row.failure_code = run.failure_code
 

@@ -1,6 +1,5 @@
 """PostgreSQL owns capacity, reconciliation locks and atomic terminal outcomes."""
 from contextlib import contextmanager
-from dataclasses import asdict
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -11,7 +10,8 @@ from mic3_api.application.models.catalog import ModelError, ReleaseDefinition
 from mic3_api.application.models.execution import ExecutionDefinition
 from mic3_api.application.runs.execution import Artifact, ExecutionFailure, ExecutionWork
 from mic3_api.application.runs.fingerprint import fingerprint
-from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, OutboxEvent, Run, RunArtifact
+from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
+from mic3_api.infrastructure.persistence.run_outcomes import finish_row
 
 CAPACITY_LOCK = 7523190401
 
@@ -20,17 +20,6 @@ def definition(session, release):
     model = session.get(Model, release.model_id)
     return ReleaseDefinition(model.id, model.display_name, release.image_digest,
                              ExecutionDefinition.from_dict(release.execution_definition))
-
-
-def finish_row(session, row, failure_code, artifacts=()):
-    if row.status in ("failed", "succeeded"):
-        return
-    row.status = "failed" if failure_code else "succeeded"
-    row.failure_code = failure_code
-    row.finished_at = datetime.now(timezone.utc)
-    for artifact in artifacts:
-        session.add(RunArtifact(run_id=row.id, **asdict(artifact)))
-    session.add(OutboxEvent(run_id=row.id, event_type=f"run.{row.status}"))
 
 
 class SqlAlchemyExecutionRecord:

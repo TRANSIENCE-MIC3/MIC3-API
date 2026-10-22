@@ -10,8 +10,9 @@ from mic3_api.application.runs.publication import PublicationError, RunEvent
 
 class KafkaEventPublisher:
     def __init__(self, bootstrap_servers: str, requests_topic: str,
-                 delivery_timeout_seconds: int = 10) -> None:
+                 delivery_timeout_seconds: int = 10, events_topic: str = "mic3.run.events.v1") -> None:
         self._topic = requests_topic
+        self._events_topic = events_topic
         self._timeout = delivery_timeout_seconds
         self._producer = Producer({
             "bootstrap.servers": bootstrap_servers,
@@ -27,7 +28,7 @@ class KafkaEventPublisher:
         })
 
     def publish(self, event: RunEvent) -> None:
-        if event.event_type != "run.requested":
+        if event.event_type not in {"run.requested", "run.succeeded", "run.failed"}:
             raise PublicationError("Unsupported outbox event type.")
         payload = json.dumps({
             "schema_version": 1,
@@ -43,7 +44,8 @@ class KafkaEventPublisher:
 
         try:
             self._producer.produce(
-                self._topic, key=str(event.run_id).encode("utf-8"), value=payload,
+                self._topic if event.event_type == "run.requested" else self._events_topic,
+                key=str(event.run_id).encode("utf-8"), value=payload,
                 on_delivery=acknowledged,
             )
             deadline = time.monotonic() + self._timeout + 1
