@@ -10,6 +10,16 @@ from mic3_api.application.models.catalog import ModelError, ReleaseDefinition
 from mic3_api.application.runs.fingerprint import fingerprint
 
 
+class RunNotFound(ModelError):
+    """The requested run has no durable submission."""
+
+
+@dataclass(frozen=True)
+class AcceptanceResult:
+    run: "RunForAcceptance"
+    outcome: str
+
+
 @dataclass(frozen=True)
 class RunForAcceptance:
     id: UUID
@@ -40,10 +50,13 @@ class AcceptRun:
         self._store = store
 
     def execute(self, run_id: UUID) -> RunForAcceptance:
+        return self.execute_with_outcome(run_id).run
+
+    def execute_with_outcome(self, run_id: UUID) -> AcceptanceResult:
         with self._store.transaction(run_id) as transaction:
             run = transaction.run
             if run.accepted_at is not None or run.status != "queued":
-                return run
+                return AcceptanceResult(run, "unchanged")
             release = transaction.load_release()
             try:
                 compatible = fingerprint(release, run.parameters) == run.fingerprint
@@ -55,4 +68,4 @@ class AcceptRun:
             else:
                 outcome = replace(run, status="failed", failure_code="execution_definition_changed")
             transaction.save_outcome(outcome)
-        return outcome
+        return AcceptanceResult(outcome, "accepted" if compatible else "failed-run")

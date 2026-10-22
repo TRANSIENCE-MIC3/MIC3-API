@@ -217,7 +217,7 @@ def test_acceptance_and_registration_serialize_on_release(migrated_engine, first
         event.remove(migrated_engine, "after_cursor_execute", after)
 
 
-def test_migration_preserves_existing_runs_and_only_adds_nullable_columns(alembic_config, postgres_test_settings):
+def test_migration_preserves_existing_runs_and_adds_acceptance_and_rejections(alembic_config, postgres_test_settings):
     command.upgrade(alembic_config, "0003_model_runs")
     engine = create_engine(postgres_test_settings.database_url)
     release_id, run_id = uuid4(), uuid4()
@@ -245,8 +245,10 @@ def test_migration_preserves_existing_runs_and_only_adds_nullable_columns(alembi
         assert saved["accepted_at"] is saved["failure_code"] is None
         assert len(saved["events"]) == 1
         assert "run_executions" not in inspect(engine).get_table_names()
+        assert "rejected_messages" in inspect(engine).get_table_names()
         command.check(alembic_config)
         command.downgrade(alembic_config, "0003_model_runs")
+        assert "rejected_messages" not in inspect(engine).get_table_names()
         with engine.connect() as connection:
             assert dict(connection.execute(select(tables["runs"])).mappings().one()) == before
     finally:

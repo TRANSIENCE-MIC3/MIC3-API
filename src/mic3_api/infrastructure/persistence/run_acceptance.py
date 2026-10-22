@@ -6,9 +6,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import ModelError, ReleaseDefinition
+from mic3_api.application.models.catalog import ReleaseDefinition
 from mic3_api.application.models.execution import ExecutionDefinition
-from mic3_api.application.runs.acceptance import RunForAcceptance
+from mic3_api.application.runs.acceptance import RunForAcceptance, RunNotFound
 from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
 
 
@@ -38,7 +38,7 @@ class SqlAlchemyRunAcceptance:
         with self._session.begin():
             release_id = self._session.scalar(select(Run.model_release_id).where(Run.id == run_id))
             if release_id is None:
-                raise ModelError("Run does not exist.")
+                raise RunNotFound("Run does not exist.")
             # Registration takes this same lock before checking protected modes.
             release = self._session.scalar(select(ModelReleaseRow).where(
                 ModelReleaseRow.id == release_id,
@@ -46,5 +46,5 @@ class SqlAlchemyRunAcceptance:
             row = self._session.scalar(select(Run).where(Run.id == run_id)
                                        .with_for_update().execution_options(populate_existing=True))
             if row is None:
-                raise ModelError("Run does not exist.")
+                raise RunNotFound("Run does not exist.")
             yield SqlAlchemyAcceptanceTransaction(self._session, row, release)

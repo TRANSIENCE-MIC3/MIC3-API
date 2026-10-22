@@ -11,7 +11,7 @@ from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
 are implemented, together with local Kafka, outbox publication and a database-backed
-run acceptance use case. Integrated
+run acceptance use case and Kafka acceptance worker. Integrated
 execution and result reuse are not yet implemented.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
@@ -42,6 +42,10 @@ flowchart LR
 - **Kafka** is required by the event-driven architecture. A publisher delivers
   committed outbox events; consumers use stable identifiers to load authoritative
   state. Events must not carry user tokens, large datasets, or output files.
+  The acceptance worker advances consumption only after PostgreSQL commits a run
+  outcome or a rejection. Invalid messages are recorded by topic, partition and
+  offset with a controlled diagnostic, without raw payloads. Replayed requests
+  reuse existing acceptance; persistence failures leave Kafka progress unchanged.
 - **The worker** owns model execution orchestration, Kubernetes interaction,
   lifecycle recovery, and output collection. It receives minimal Job RBAC and
   separate database permissions. Workers do not create or migrate schemas.
