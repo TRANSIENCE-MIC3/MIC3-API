@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.kafka_bootstrap_servers, settings.kafka_requests_topic,
             settings.kafka_delivery_timeout_seconds,
             settings.kafka_events_topic,
+            security=settings,
         )
         for sig in (signal.SIGINT, signal.SIGTERM):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())

@@ -1,14 +1,11 @@
-"""Configuration for acceptance only; execution settings belong to later work."""
+"""Acceptance settings shared by both worker modes."""
 
 from pydantic import Field
 
-from mic3_api.core.config import DatabaseSettings
+from mic3_api.core.kafka_config import KafkaSettings
 
 
-class WorkerSettings(DatabaseSettings):
-    kafka_bootstrap_servers: str = Field(default="127.0.0.1:9092", min_length=1)
-    kafka_requests_topic: str = Field(default="mic3.run.requests.v1",
-                                      pattern=r"^[a-z0-9]+(?:\.[a-z0-9]+)+$", max_length=249)
+class WorkerSettings(KafkaSettings):
     kafka_consumer_group: str = Field(default="mic3.execution.worker.v1",
                                      pattern=r"^[a-z0-9]+(?:\.[a-z0-9]+)+$", max_length=249)
     worker_retry_seconds: float = Field(default=2, gt=0, le=60)

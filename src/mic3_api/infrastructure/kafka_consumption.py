@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from confluent_kafka import Consumer, KafkaException, TopicPartition
 
 from mic3_api.application.runs.consumption import RecordLocation
+from mic3_api.core.kafka_config import KafkaSettings
+from mic3_api.infrastructure.kafka_security import security_config
 
 
 @dataclass(frozen=True)
@@ -15,12 +17,13 @@ class KafkaRecord:
 
 
 class KafkaRequestConsumer:
-    def __init__(self, bootstrap_servers: str, topic: str, group: str) -> None:
+    def __init__(self, bootstrap_servers: str, topic: str, group: str,
+                 *, security: KafkaSettings | None = None) -> None:
         self._consumer = Consumer({
             "bootstrap.servers": bootstrap_servers,
             "group.id": group,
             "client.id": "mic3.execution.worker",
-            "security.protocol": "PLAINTEXT",
+            **security_config(security),
             "enable.auto.commit": False,
             "enable.auto.offset.store": False,
             "auto.offset.reset": "earliest",

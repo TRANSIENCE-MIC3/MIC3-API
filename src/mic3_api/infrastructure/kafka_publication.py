@@ -6,18 +6,21 @@ import time
 from confluent_kafka import KafkaException, Producer
 
 from mic3_api.application.runs.publication import PublicationError, RunEvent
+from mic3_api.core.kafka_config import KafkaSettings
+from mic3_api.infrastructure.kafka_security import security_config
 
 
 class KafkaEventPublisher:
     def __init__(self, bootstrap_servers: str, requests_topic: str,
-                 delivery_timeout_seconds: int = 10, events_topic: str = "mic3.run.events.v1") -> None:
+                 delivery_timeout_seconds: int = 10, events_topic: str = "mic3.run.events.v1",
+                 *, security: KafkaSettings | None = None) -> None:
         self._topic = requests_topic
         self._events_topic = events_topic
         self._timeout = delivery_timeout_seconds
         self._producer = Producer({
             "bootstrap.servers": bootstrap_servers,
             "client.id": "mic3.outbox.publisher",
-            "security.protocol": "PLAINTEXT",
+            **security_config(security),
             "enable.idempotence": True,
             "acks": "all",
             "message.timeout.ms": delivery_timeout_seconds * 1000,

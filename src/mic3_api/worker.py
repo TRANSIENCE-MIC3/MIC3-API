@@ -1,4 +1,4 @@
-"""Accept Kafka requests durably; this process does not dispatch model Jobs."""
+"""Accept Kafka requests durably, optionally dispatching model Jobs with --execute."""
 
 import argparse
 import logging
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
         consumer_factory = lambda: KafkaRequestConsumer(settings.kafka_bootstrap_servers,
-                   settings.kafka_requests_topic, settings.kafka_consumer_group)
+                   settings.kafka_requests_topic, settings.kafka_consumer_group, security=settings)
         if args.execute:
             from mic3_api.execution_runtime import run_with_execution
             return run_with_execution(database, consumer_factory, settings, stop, run)

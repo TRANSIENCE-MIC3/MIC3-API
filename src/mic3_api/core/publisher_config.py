@@ -2,14 +2,10 @@
 
 from pydantic import Field
 
-from mic3_api.core.config import DatabaseSettings
+from mic3_api.core.kafka_config import KafkaSettings
 
 
-class PublisherSettings(DatabaseSettings):
-    kafka_bootstrap_servers: str = Field(default="127.0.0.1:9092", min_length=1)
-    kafka_requests_topic: str = Field(
-        default="mic3.run.requests.v1", pattern=r"^[a-z0-9]+(?:\.[a-z0-9]+)+$", max_length=249,
-    )
+class PublisherSettings(KafkaSettings):
     kafka_delivery_timeout_seconds: int = Field(default=10, ge=1, le=60)
     publisher_batch_size: int = Field(default=10, ge=1, le=100)
     kafka_events_topic: str = Field(default="mic3.run.events.v1", pattern=r"^[a-z0-9]+(?:\.[a-z0-9]+)+$", max_length=249)

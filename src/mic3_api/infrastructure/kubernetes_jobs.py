@@ -23,7 +23,12 @@ class KubernetesJobs:
     @classmethod
     def connect(cls, kubeconfig, context, renderer, namespace):
         configuration = client.Configuration()
-        config.load_kube_config(config_file=str(kubeconfig), context=context, client_configuration=configuration)
+        if kubeconfig is None and context is None:
+            config.load_incluster_config(client_configuration=configuration)
+        elif kubeconfig is not None and context is not None:
+            config.load_kube_config(config_file=str(kubeconfig), context=context, client_configuration=configuration)
+        else:
+            raise ValueError("Kubeconfig and context must be provided together")
         configuration.retries = 0
         return cls(client.ApiClient(configuration), renderer, namespace)
 
