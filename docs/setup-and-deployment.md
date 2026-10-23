@@ -6,7 +6,8 @@ This guide covers releases, debugging, and essential operations.
 ## Prepare a release
 
 1. Update `[project].version` in [pyproject.toml](../pyproject.toml) to the next
-   unused stable version. No other version file needs editing.
+   unused stable version. Align the execution-services chart's `appVersion` with
+   that application release; its chart `version` follows chart changes separately.
 2. Commit reviewed changes, push to `staging`, and merge into `master`.
 3. Tag the merged commit with `v` followed by that exact version and push the tag
    using the [commands below](#deploy-commands). Never move an existing release tag.
@@ -18,20 +19,45 @@ must already be configured.
 
 ## What deployment does
 
-**Actions → Release and deploy API**:
+**Actions → Publish services and deploy API**:
 
 1. Validates the tag against the package version.
-2. Runs unit/integration tests, publishes the image, and saves its source commit
-   and immutable digest in the release's `release.json`. An existing valid release
-   is reused without rebuilding or rerunning those tests.
-3. Validates manifests and runs `alembic upgrade head` in a migration Job.
-4. Updates the API only after migration succeeds and waits for rollout.
-5. Checks public health/readiness, unauthenticated `401`, and OIDC discovery/keys.
+2. Installs checksum-verified Helm and runs unit/integration tests, including chart
+   checks. Builds Linux/amd64 API, publisher and worker images from the same tag,
+   then checks runtime dependency separation, bundled model rendering and secured
+   Kafka packaging. The local kind/AIStor smoke remains opt-in.
+3. Publishes those tested images without rebuilding. Verifies all three immutable
+   references before saving `release.json`. An existing valid release is reused
+   without rebuilding or rerunning those tests.
+4. Validates manifests and runs `alembic upgrade head` in a migration Job.
+5. Updates the API only after migration succeeds and waits for rollout.
+6. Checks public health/readiness, unauthenticated `401`, and OIDC discovery/keys.
 
-The Actions summary records the image, source/workflow commits, migration Job,
+The Actions summary records all image references, source/workflow commits, migration Job,
 and outcome. Authenticated login/admin acceptance is a separate smoke check.
 Database provisioning, Keycloak reconciliation, networking, certificates, and
 RBAC are separate operations, not part of normal API releases.
+
+New release records use `format_version: 2`, with `release_tag`, `commit`, and an
+`images` object containing exactly `api`, `publisher`, and `worker`. Each entry
+has `image_repository` and `image_ref` (`repository:version@sha256:digest`). The
+repositories are `ghcr.io/transience-mic3/mic3-api`, `mic3-publisher`, and
+`mic3-worker` under the same organization. Existing format-version-1 records
+remain valid for API-only retries; they never imply execution-service images.
+
+Only the API digest is passed to automated deployment. Publisher/worker Helm
+installation, enablement and image updates remain manual, using the corresponding
+recorded digests. Kafka, PostgreSQL, Keycloak, storage and certificates are not
+updated by this workflow. The deployer's permissions are unchanged.
+
+For the initial Kafka rollout, complete the prerequisite review before pushing
+the release tag: verify cloud certificates/trust and infrastructure, establish
+separate database identities, review migrations, and resolve the historical
+queued request. A tag push still migrates the database and deploys the API.
+After that succeeds, install execution workloads at zero replicas, then enable
+one publisher and one worker at capacity one during the controlled walkthrough.
+The walkthrough supplies exact commands and stop/recovery conditions in small
+batches; publication alone does not establish EOSC execution qualification.
 
 ## Debugging and retry
 
@@ -46,11 +72,16 @@ Start with the failed step and summary in GitHub Actions.
 
 After resolving an operational failure, select **Run workflow**, choose `master`,
 and enter the existing `release_tag`. It reuses the release record; if neither
-record nor image exists, it tests/publishes the tagged source first. An image
-without its record requires recovery, not overwrite.
+record nor any of the three version images exists, it tests/publishes the tagged
+source first. Any version image without a complete record requires recovery,
+not overwrite. Authentication/network failures never count as missing releases
+or images. Failure in any build, check, push or reference validation stops API
+deployment; partially published images may remain in GHCR.
 
 For workflow/template fixes, start a **fresh manual run** from updated `master`;
-rerunning an old failed run retains its old workflow. Application and migration
+rerunning an old failed run retains its old workflow. Release-record tooling also
+comes from the selected workflow revision, so old tags need not contain it.
+Application and migration
 code still come from the tag/image, so code fixes require a new patch version.
 
 There is no automatic rollback or database downgrade. Successful migrations remain
@@ -58,8 +89,12 @@ applied even if rollout fails and must support the running API. Never overwrite
 version images or delete database PVCs. Normal automation blocks older versions.
 Manual image recovery requires schema compatibility, rollout/login checks, and
 matching Deployment release annotations/version label; do not run older migrations.
-Recover `release.json` only from verified tag, commit, repository, and image digest;
-never replace a valid record.
+Recover `release.json` only from verified tag, commit, repositories, and image
+digests; a new format-version-2 record must contain all three images. Save the
+published digest evidence before investigating partial publication. If evidence
+is incomplete, use a new version rather than rebuilding into existing version
+tags. Never replace a valid record. Code/migration compatibility with manually
+deployed execution services must be reviewed before every later API release.
 
 ## Operational reference
 
@@ -209,7 +244,7 @@ admin `200`, member `403`, and missing/invalid-token `401` acceptance.
 
 After the reviewed version change is merged, replace `X.Y.Z` with the exact
 `[project].version`. Run from a clean checkout, one command at a time; stop on
-failure. Then watch **Actions → Release and deploy API**.
+failure. Then watch **Actions → Publish services and deploy API**.
 
 ```sh
 git switch master

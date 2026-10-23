@@ -1,5 +1,6 @@
 .git
 .github
+.workflow-tools
 .idea
 .env
 .venv
