@@ -1,0 +1,41 @@
+name: mic3-kafka
+image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
+clusterDomain: cluster.local
+certificates:
+  enabled: true
+  duration: 2160h
+  renewBefore: 360h
+broker:
+  # First install issues certificates only. Enable after establishing CA trust.
+  enabled: false
+  # Generate once with kafka-storage.sh random-uuid; retain with the PVC.
+  clusterId: ""
+  heapOpts: -Xms256m -Xmx512m
+  resources:
+    requests: {cpu: 250m, memory: 1Gi, ephemeral-storage: 128Mi}
+    limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 512Mi}
+persistence:
+  storageClass: standard
+  size: 10Gi
+  accessMode: ReadWriteOnce
+# Existing ConfigMap containing ONLY the independently verified public ca.crt.
+# Never mount the CA signing Secret into Kafka or its clients.
+trustConfigMap: mic3-kafka-trust
+topics:
+  requests: mic3.run.requests.v1
+  events: mic3.run.events.v1
+  retentionMs: 604800000
+  retentionBytes: 1073741824
+  segmentBytes: 67108864
+consumerGroup: mic3.execution.worker.v1
+networkPolicy:
+  # Kubernetes DNS and the OpenShift DNS Pod target port.
+  dnsPorts: [53, 5353]
+bootstrapResources:
+  requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 64Mi}
+  limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 128Mi}
+# Only for local clusters; EOSC assigns its restricted UID and volume group.
+podIdentity: {}
+nodeSelector:
+  kubernetes.io/os: linux
+  kubernetes.io/arch: amd64

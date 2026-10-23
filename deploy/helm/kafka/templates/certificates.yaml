@@ -1,0 +1,54 @@
+{{- if .Values.certificates.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.name }}-selfsigned
+  annotations: {helm.sh/resource-policy: keep}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.name }}-ca
+  annotations: {helm.sh/resource-policy: keep}
+spec:
+  secretName: {{ .Values.name }}-ca
+  commonName: {{ .Values.name }}-ca
+  isCA: true
+  duration: 87600h
+  renewBefore: 720h
+  privateKey: {algorithm: RSA, size: 3072, encoding: PKCS8, rotationPolicy: Never}
+  usages: [cert sign, crl sign, digital signature]
+  issuerRef: {name: {{ .Values.name }}-selfsigned, kind: Issuer}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.name }}-ca
+  annotations: {helm.sh/resource-policy: keep}
+spec:
+  ca: {secretName: {{ .Values.name }}-ca}
+{{- range $role := list "broker" "publisher" "worker" "operator" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $.Values.name }}-{{ $role }}-tls
+spec:
+  secretName: {{ $.Values.name }}-{{ $role }}-tls
+  commonName: {{ $.Values.name }}-{{ $role }}
+  duration: {{ $.Values.certificates.duration }}
+  renewBefore: {{ $.Values.certificates.renewBefore }}
+  privateKey: {algorithm: RSA, size: 2048, encoding: PKCS8, rotationPolicy: Always}
+  issuerRef: {name: {{ $.Values.name }}-ca, kind: Issuer}
+  {{- if eq $role "broker" }}
+  usages: [digital signature, key encipherment, server auth, client auth]
+  dnsNames:
+    - {{ include "kafka.address" $ }}
+    - {{ include "kafka.controller" $ }}
+  {{- else }}
+  usages: [digital signature, client auth]
+  {{- end }}
+{{- end }}
+{{- end }}

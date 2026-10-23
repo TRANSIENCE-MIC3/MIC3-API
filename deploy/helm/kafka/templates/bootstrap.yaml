@@ -1,0 +1,64 @@
+{{- if .Values.broker.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.name }}-bootstrap
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.name }}-bootstrap
+        mic3.io/kafka-cluster: {{ .Values.name }}
+        mic3.io/kafka-client: {{ .Values.name }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext:
+        {{- include "kafka.securityContext" . | nindent 8 }}
+      containers:
+        - name: configure
+          image: {{ .Values.image | quote }}
+          command: [/bin/bash, /etc/mic3/kafka/initialize.sh]
+          env:
+            - {name: BOOTSTRAP_SERVERS, value: {{ printf "%s:9092" (include "kafka.address" .) | quote }}}
+            - {name: REQUESTS_TOPIC, value: {{ .Values.topics.requests | quote }}}
+            - {name: EVENTS_TOPIC, value: {{ .Values.topics.events | quote }}}
+            - {name: RETENTION_MS, value: {{ .Values.topics.retentionMs | int64 | quote }}}
+            - {name: RETENTION_BYTES, value: {{ .Values.topics.retentionBytes | int64 | quote }}}
+            - {name: SEGMENT_BYTES, value: {{ .Values.topics.segmentBytes | int64 | quote }}}
+            - {name: CONSUMER_GROUP, value: {{ .Values.consumerGroup | quote }}}
+            - {name: PUBLISHER_IDENTITY, value: {{ printf "%s-publisher" .Values.name | quote }}}
+            - {name: WORKER_IDENTITY, value: {{ printf "%s-worker" .Values.name | quote }}}
+            - {name: KAFKA_HEAP_OPTS, value: -Xms64m -Xmx128m}
+            - {name: LOG_DIR, value: /tmp/kafka}
+            - {name: HOME, value: /tmp}
+          resources:
+            {{- toYaml .Values.bootstrapResources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: configuration, mountPath: /etc/mic3/kafka, readOnly: true}
+            - {name: identity, mountPath: /var/run/mic3/kafka, readOnly: true}
+            - {name: trust, mountPath: /var/run/mic3/kafka-trust, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: configuration
+          configMap: {name: {{ .Values.name }}-configuration}
+        - name: identity
+          secret:
+            secretName: {{ .Values.name }}-operator-tls
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
+        - name: trust
+          configMap: {name: {{ .Values.trustConfigMap }}}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

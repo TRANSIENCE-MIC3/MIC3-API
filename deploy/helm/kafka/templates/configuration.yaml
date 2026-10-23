@@ -1,0 +1,19 @@
+{{- if .Values.broker.enabled }}
+{{- required "broker.clusterId must be generated once and retained with the Kafka PVC" .Values.broker.clusterId | trunc 0 }}
+{{- if eq .Values.topics.requests .Values.topics.events }}
+{{- fail "Request and terminal-event topics must be distinct" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-configuration
+data:
+  server.properties: |
+    {{- tpl (.Files.Get "files/server.properties") . | nindent 4 }}
+  client.properties: |
+    {{- .Files.Get "files/client.properties" | nindent 4 }}
+  start.sh: |
+    {{- .Files.Get "files/start.sh" | nindent 4 }}
+  initialize.sh: |
+    {{- .Files.Get "files/initialize.sh" | nindent 4 }}
+{{- end }}
