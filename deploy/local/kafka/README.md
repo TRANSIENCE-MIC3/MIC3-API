@@ -27,7 +27,8 @@ The single-node chart retains its PVC, requires mTLS on client/controller ports,
 and initializes two bounded-retention topics plus application ACLs. It is a
 development deployment without high availability. Network policies are additive:
 EOSC's existing same-namespace allowance must be reviewed before claiming network
-isolation. EOSC deployment and cert-manager issuance remain pending.
+isolation. EOSC deployment and initial cert-manager issuance are complete;
+renewal propagation and broader isolation checks remain open.
 
 Leaf certificates default to 90 days with renewal 15 days before expiry. After
 renewal, deliberately restart Kafka and the publisher/worker to load new keys;
@@ -60,5 +61,6 @@ It refuses non-local/non-kind clusters, uses a random disposable namespace and
 temporary database/TLS identities, and preserves AIStor objects under fresh run
 UUIDs. It requires local packaged images and existing `mic3-local` storage Secrets.
 Kind results do not establish EOSC admission, cert-manager issuance or network
-policy enforcement. Release-workflow review and the 0.1.9 checkpoint precede live
-deployment; the operator walkthrough is provided separately, two steps at a time.
+policy enforcement. EOSC execution is deployed at application release 0.1.9;
+see the [runbook](../../../docs/setup-and-deployment.md) for manual workload updates
+and the API-server egress rule verified during rollout.

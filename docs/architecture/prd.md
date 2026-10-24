@@ -10,9 +10,10 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
-are implemented, together with local Kafka, outbox publication and a database-backed
-run acceptance and an optional execution worker. Local Kubernetes execution and
-artifact persistence are implemented; EOSC execution deployment and result reuse remain pending.
+are implemented, together with Kafka, outbox publication, database-backed run
+acceptance and an execution worker. Kubernetes execution and artifact persistence
+are deployed locally and on EOSC. Authenticated API submission is the next milestone;
+shared-result reuse remains deferred.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
 
@@ -143,7 +144,9 @@ nullable publication time. A separate publisher sends acknowledged, versioned
 after acknowledgement but before database commit retains the same event ID.
 Identical submissions remain separate queued runs and events. Terminal
 `run.succeeded`/`run.failed` events use `mic3.run.events.v1`; requests use
-`mic3.run.requests.v1`. Public run endpoints and attempt tracking are deferred.
+`mic3.run.requests.v1`. Authenticated run submission/status endpoints are next;
+their authorization and admission contracts must be defined before implementation.
+Attempt tracking remains deferred.
 The CLI requires operator database access.
 
 Acceptance uses the existing `runs` record: nullable `accepted_at` records durable
