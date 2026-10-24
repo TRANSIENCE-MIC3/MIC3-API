@@ -3,4 +3,4 @@ name: execution-services
 description: MIC3 outbox publisher and execution worker
 type: application
 version: 0.1.0
-appVersion: "0.1.8"
+appVersion: "0.1.9"
