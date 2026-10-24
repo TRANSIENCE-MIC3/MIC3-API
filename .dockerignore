@@ -17,3 +17,4 @@ deploy/local/kubeconfig
 deploy/local/secrets/
 deploy/local/bin/
 deploy/local/evidence/
+deploy/okd/secrets/

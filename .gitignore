@@ -50,3 +50,6 @@ __pycache__/
 /deploy/local/kubeconfig
 /deploy/local/secrets/
 /deploy/local/evidence/
+
+# Machine-specific EOSC credentials; never commit.
+/deploy/okd/secrets/

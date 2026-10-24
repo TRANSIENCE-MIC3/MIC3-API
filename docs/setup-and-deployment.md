@@ -100,6 +100,11 @@ deployed execution services must be reviewed before every later API release.
 
 ### Configuration and infrastructure
 
+Manual EOSC commands use the machine-specific kubeconfig at
+`deploy/okd/secrets/eosc-kubeconfig`; that folder is excluded from Git and Docker
+builds. The separate `deploy/local/kubeconfig` connects to the local kind cluster.
+GitHub Actions creates its own temporary kubeconfig from environment secrets.
+
 | Area | Configuration / source |
 | --- | --- |
 | Local | [.env.example](../.env.example), [Compose](../compose.yaml); distinct local-only passwords in untracked `.env` |
