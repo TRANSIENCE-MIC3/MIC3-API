@@ -1,10 +1,13 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ printf "mic3-run-%s" .Values.runId }}
+  annotations:
+    mic3.io/fingerprint: {{ required "runFingerprint is required" .Values.runFingerprint | quote }}
   labels:
     app.kubernetes.io/name: {{ required "model.id is required" .Values.model.id | quote }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ printf "mic3-run-%s" .Values.runId }}
+    mic3.io/run-id: {{ .Values.runId | quote }}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
@@ -12,7 +15,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: {{ .Values.model.id | quote }}
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/instance: {{ printf "mic3-run-%s" .Values.runId }}
+        mic3.io/run-id: {{ .Values.runId | quote }}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -25,6 +29,9 @@ spec:
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       securityContext:
+        {{- with .Values.podIdentity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       initContainers:

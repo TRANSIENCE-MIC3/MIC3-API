@@ -1,0 +1,2 @@
+deploy/local/kafka/*.sh text eol=lf
+deploy/helm/**/*.sh text eol=lf

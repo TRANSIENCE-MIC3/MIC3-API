@@ -1,5 +1,6 @@
 .git
 .github
+.workflow-tools
 .idea
 .env
 .venv
@@ -12,3 +13,8 @@ tests
 examples
 AGENTS.md
 PROJECT_STATUS.md
+deploy/local/kubeconfig
+deploy/local/secrets/
+deploy/local/bin/
+deploy/local/evidence/
+deploy/okd/secrets/

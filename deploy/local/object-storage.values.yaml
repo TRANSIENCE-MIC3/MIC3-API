@@ -1,0 +1,6 @@
+podIdentity: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+service: {type: NodePort, s3NodePort: 30900, consoleNodePort: 30901}
+reader:
+  enabled: true
+  secret: mic3-artifact-reader-credentials
+  policyName: mic3-artifact-read

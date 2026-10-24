@@ -1,4 +1,4 @@
-name: Release and deploy API
+name: Publish services and deploy API
 
 on:
   push:
@@ -18,15 +18,14 @@ defaults:
     shell: bash
 
 env:
-  IMAGE_NAME: ghcr.io/transience-mic3/mic3-api
+  IMAGE_PREFIX: ghcr.io/transience-mic3/mic3
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-  DOCKER_BUILD_RECORD_UPLOAD: "false"
 
 jobs:
   prepare:
     name: Prepare release
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     permissions:
       contents: write
       packages: write
@@ -45,6 +44,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      # Release tooling follows the workflow, including retries of legacy tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workflow-tools
+          sparse-checkout: scripts
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -65,30 +71,24 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Reuse an existing release or prepare to publish
         id: record
-        run: |
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json" 2> "$RUNNER_TEMP/release-error"; then
-            jq -e '.draft == false and .prerelease == false and ([.assets[] | select(.name == "release.json")] | length == 1)' "$RUNNER_TEMP/release-metadata.json"
-            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern release.json --dir "$RUNNER_TEMP"
-            echo 'build_required=false' >> "$GITHUB_OUTPUT"
-          else
-            # Only a confirmed missing release permits publication; auth/network failures stop.
-            grep -Fq '(HTTP 404)' "$RUNNER_TEMP/release-error" || { cat "$RUNNER_TEMP/release-error" >&2; exit 1; }
-            echo 'build_required=true' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Refuse to overwrite an existing version image
+        env:
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: python .workflow-tools/scripts/release_record.py discover --record "$RUNNER_TEMP/release.json"
+      - name: Refuse to overwrite any existing version image
         if: steps.record.outputs.build_required == 'true'
         env:
-          VERSION: ${{ steps.source.outputs.version }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: python .workflow-tools/scripts/release_record.py preflight --record "$RUNNER_TEMP/release.json"
+      - name: Install verified Helm for chart tests
+        if: steps.record.outputs.build_required == 'true'
         run: |
-          if docker manifest inspect "$IMAGE_NAME:$VERSION" > /dev/null 2> "$RUNNER_TEMP/image-error"; then
-            echo 'Image already exists. Recover its release.json or publish a new version; see docs/setup-and-deployment.md.' >&2
-            exit 1
-          fi
-          # A registry/authentication failure must not be mistaken for a missing image.
-          case "$(cat "$RUNNER_TEMP/image-error")" in
-            "manifest unknown" | "no such manifest: $IMAGE_NAME:$VERSION") ;;
-            *) cat "$RUNNER_TEMP/image-error" >&2; exit 1 ;;
-          esac
+          mkdir -p "$RUNNER_TEMP/helm-client"
+          cd "$RUNNER_TEMP/helm-client"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz -o helm.tar.gz
+          echo '86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tar.gz' | sha256sum --check -
+          tar -xzf helm.tar.gz linux-amd64/helm
+          echo "$RUNNER_TEMP/helm-client/linux-amd64" >> "$GITHUB_PATH"
       - name: Install test dependencies
         if: steps.record.outputs.build_required == 'true'
         run: |
@@ -96,52 +96,51 @@ jobs:
           python -m pip check
       - name: Run unit and integration tests
         if: steps.record.outputs.build_required == 'true'
-        run: python -m pytest tests/unit tests/integration --durations=8
+        run: |
+          command -v helm
+          helm version --short
+          python -m pytest tests/unit tests/integration --durations=8
       - name: Set up Docker Buildx
         if: steps.record.outputs.build_required == 'true'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Build and publish image
+      - name: Build all three local images
         if: steps.record.outputs.build_required == 'true'
-        id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ steps.source.outputs.version }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
-            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          for role in api publisher worker; do
+            docker buildx build --platform linux/amd64 --target "$role" --load --provenance=false \
+              --tag "$IMAGE_PREFIX-$role:$VERSION" \
+              --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$COMMIT" \
+              --label "org.opencontainers.image.version=$VERSION" .
+          done
+      - name: Validate packaged runtimes and secured Kafka
+        if: steps.record.outputs.build_required == 'true'
+        env:
+          MIC3_RUNTIME_PACKAGING_SMOKE: "1"
+          MIC3_KAFKA_PACKAGING_SMOKE: "1"
+          MIC3_API_IMAGE: ${{ env.IMAGE_PREFIX }}-api:${{ steps.source.outputs.version }}
+          MIC3_PUBLISHER_IMAGE: ${{ env.IMAGE_PREFIX }}-publisher:${{ steps.source.outputs.version }}
+          MIC3_WORKER_IMAGE: ${{ env.IMAGE_PREFIX }}-worker:${{ steps.source.outputs.version }}
+          MIC3_KAFKA_CLIENT_IMAGE: ${{ env.IMAGE_PREFIX }}-worker:${{ steps.source.outputs.version }}
+        run: python -m pytest tests/smoke/test_runtime_packaging.py tests/smoke/test_kafka_packaging.py -q
+      - name: Publish tested images and verify immutable references
+        if: steps.record.outputs.build_required == 'true'
+        env:
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: python .workflow-tools/scripts/release_record.py publish --record "$RUNNER_TEMP/release.json"
       - name: Save immutable release record
         if: steps.record.outputs.build_required == 'true'
-        env:
-          VERSION: ${{ steps.source.outputs.version }}
-          COMMIT: ${{ steps.source.outputs.commit }}
-          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          jq -n --arg tag "$RELEASE_TAG" --arg commit "$COMMIT" --arg repo "$IMAGE_NAME" \
-            --arg image "$IMAGE_NAME:$VERSION@$DIGEST" \
-            '{format_version: 1, release_tag: $tag, commit: $commit, image_repository: $repo, image_ref: $image}' > "$RUNNER_TEMP/release.json"
           gh release create "$RELEASE_TAG" "$RUNNER_TEMP/release.json" --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --title "$RELEASE_TAG" --notes 'API image published. See Actions for deployment results.'
-      - name: Validate release record and pass its image to deployment
+            --verify-tag --title "$RELEASE_TAG" --notes 'API, publisher and worker images published. Only the API is deployed automatically; see Actions for results.'
+      - name: Validate release record and pass only API image to deployment
         id: image
         env:
-          VERSION: ${{ steps.source.outputs.version }}
           COMMIT: ${{ steps.source.outputs.commit }}
-        run: |
-          # One contract check for both newly published and reused records.
-          jq -e --arg tag "$RELEASE_TAG" --arg commit "$COMMIT" --arg repo "$IMAGE_NAME" --arg version "$VERSION" '
-            .format_version == 1 and .release_tag == $tag and .commit == $commit and
-            .image_repository == $repo and (.image_ref | startswith($repo + ":" + $version + "@")) and
-            (.image_ref | ltrimstr($repo + ":" + $version + "@") | test("^sha256:[0-9a-f]{64}$"))
-          ' "$RUNNER_TEMP/release.json"
-          image=$(jq -r .image_ref "$RUNNER_TEMP/release.json")
-          docker manifest inspect "$image" > /dev/null
-          echo "image_ref=$image" >> "$GITHUB_OUTPUT"
-          printf 'Release: `%s`\n\nImage: `%s`\n' "$RELEASE_TAG" "$image" >> "$GITHUB_STEP_SUMMARY"
+        run: python .workflow-tools/scripts/release_record.py validate --record "$RUNNER_TEMP/release.json"
 
   deploy:
     name: Deploy to EOSC

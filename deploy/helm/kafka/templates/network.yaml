@@ -1,0 +1,40 @@
+{{- if .Values.broker.enabled }}
+# Policies are additive. An existing broad ingress allowance must be reviewed
+# separately; this policy cannot override it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.name }}-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: {{ .Values.name }}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {mic3.io/kafka-client: {{ .Values.name }}}
+      ports: [{protocol: TCP, port: 9092}]
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: {{ .Values.name }}}
+      ports: [{protocol: TCP, port: 9092}, {protocol: TCP, port: 9093}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.name }}-egress
+spec:
+  podSelector:
+    matchLabels: {mic3.io/kafka-cluster: {{ .Values.name }}}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range .Values.networkPolicy.dnsPorts }}
+        - {protocol: UDP, port: {{ . }}}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: {{ .Values.name }}}
+      ports: [{protocol: TCP, port: 9092}, {protocol: TCP, port: 9093}]
+{{- end }}

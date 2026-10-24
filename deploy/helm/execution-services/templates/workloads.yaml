@@ -1,0 +1,137 @@
+{{- if eq .Values.publisher.databaseSecret .Values.worker.databaseSecret }}
+{{- fail "publisher and worker require separate database Secrets" }}
+{{- end }}
+{{- if eq .Values.artifactReaderSecret .Values.modelValues.storage.secret }}
+{{- fail "artifact reader and uploader require separate Secrets" }}
+{{- end }}
+{{- if eq .Values.publisher.tlsSecret .Values.worker.tlsSecret }}
+{{- fail "publisher and worker require separate TLS identities" }}
+{{- end }}
+{{- if eq .Values.kafka.requestsTopic .Values.kafka.eventsTopic }}
+{{- fail "request and terminal-event topics must be distinct" }}
+{{- end }}
+{{- if and (gt (int .Values.worker.replicas) 0) (empty .Values.networkPolicy.apiPeers) }}
+{{- fail "set networkPolicy.apiPeers to verified cluster API destinations before enabling worker" }}
+{{- end }}
+{{- range $role := list "publisher" "worker" }}
+{{- $service := index $.Values $role }}
+{{- if and (gt (int $service.replicas) 0) (empty $service.image) }}
+{{- fail (printf "%s.image is required before enabling" $role) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mic3-{{ $role }}
+automountServiceAccountToken: {{ eq $role "worker" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mic3-{{ $role }}
+spec:
+  replicas: {{ $service.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/name: mic3-{{ $role }}}
+  template:
+    metadata:
+      annotations:
+        checksum/values: {{ toJson $.Values | sha256sum }}
+      labels:
+        app.kubernetes.io/name: mic3-{{ $role }}
+        mic3.io/kafka-client: {{ $.Values.kafka.name }}
+    spec:
+      serviceAccountName: mic3-{{ $role }}
+      automountServiceAccountToken: {{ eq $role "worker" }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+        {{- with $.Values.podIdentity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      nodeSelector: {{ toYaml $.Values.nodeSelector | nindent 8 }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ $role }}
+          # A deliberately unpullable digest permits a disabled initial install.
+          image: {{ $service.image | default (printf "invalid.local/mic3-%s@sha256:%s" $role (repeat 64 "0")) | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, mic3_api.{{ $role }}]
+          {{- if eq $role "worker" }}
+          args: [--execute]
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ toYaml $service.resources | nindent 12 }}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: DB_HOST, value: {{ $.Values.database.host | quote }}}
+            - {name: DB_PORT, value: {{ $.Values.database.port | quote }}}
+            {{- range $env, $key := dict "DB_NAME" "database" "DB_USER" "username" "DB_PASSWORD" "password" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef: {name: {{ $service.databaseSecret }}, key: {{ $key }}}
+            {{- end }}
+            - {name: KAFKA_BOOTSTRAP_SERVERS, value: {{ printf "%s.%s.svc.%s:9092" $.Values.kafka.name $.Release.Namespace $.Values.kafka.clusterDomain | quote }}}
+            - {name: KAFKA_REQUESTS_TOPIC, value: {{ $.Values.kafka.requestsTopic | quote }}}
+            {{- if eq $role "publisher" }}
+            - {name: KAFKA_EVENTS_TOPIC, value: {{ $.Values.kafka.eventsTopic | quote }}}
+            {{- end }}
+            - {name: KAFKA_SECURITY_PROTOCOL, value: SSL}
+            - {name: KAFKA_SSL_CA_FILE, value: /var/run/mic3/kafka-trust/ca.crt}
+            - {name: KAFKA_SSL_CERTIFICATE_FILE, value: /var/run/mic3/kafka/tls.crt}
+            - {name: KAFKA_SSL_KEY_FILE, value: /var/run/mic3/kafka/tls.key}
+            {{- if eq $role "worker" }}
+            - {name: KAFKA_CONSUMER_GROUP, value: {{ $.Values.kafka.consumerGroup | quote }}}
+            - {name: EXECUTION_NAMESPACE, value: {{ $.Release.Namespace | quote }}}
+            - {name: EXECUTION_CAPACITY, value: {{ $service.capacity | quote }}}
+            - {name: EXECUTION_VALUES_FILE, value: /etc/mic3/model/values.yaml}
+            - {name: ARTIFACT_ENDPOINT, value: {{ $.Values.modelValues.storage.endpoint | quote }}}
+            - {name: ARTIFACT_BUCKET, value: {{ $.Values.modelValues.storage.bucket | quote }}}
+            {{- range $env, $key := dict "ARTIFACT_ACCESS_KEY" "AWS_ACCESS_KEY_ID" "ARTIFACT_SECRET_KEY" "AWS_SECRET_ACCESS_KEY" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef: {name: {{ $.Values.artifactReaderSecret }}, key: {{ $key }}}
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - {name: temporary, mountPath: /tmp}
+            - {name: identity, mountPath: /var/run/mic3/kafka, readOnly: true}
+            - {name: trust, mountPath: /var/run/mic3/kafka-trust, readOnly: true}
+            {{- if eq $role "worker" }}
+            - {name: model-values, mountPath: /etc/mic3/model, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: temporary
+          emptyDir: {sizeLimit: 128Mi}
+        - name: identity
+          secret:
+            secretName: {{ $service.tlsSecret }}
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
+        - name: trust
+          configMap:
+            name: {{ $.Values.kafka.trustConfigMap }}
+            items: [{key: ca.crt, path: ca.crt}]
+        {{- if eq $role "worker" }}
+        - name: model-values
+          configMap: {name: mic3-model-values}
+        {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mic3-model-values
+data:
+  values.yaml: |
+    {{- toYaml .Values.modelValues | nindent 4 }}

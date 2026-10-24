@@ -20,7 +20,7 @@ from mic3_api.infrastructure.persistence import (
 
 APPLICATION_TABLES = {
     "users", "roles", "user_identities", "user_roles",
-    "models", "model_releases", "runs", "outbox_events",
+    "models", "model_releases", "runs", "outbox_events", "rejected_messages", "run_artifacts",
 }
 MEMBER_DESCRIPTION = "Default non-elevated MIC3 member role."
 
@@ -59,6 +59,9 @@ def test_upgrade_creates_schema_matching_model_metadata(
 
         assert set(Base.metadata.tables) == APPLICATION_TABLES
         assert APPLICATION_TABLES <= set(database_inspector.get_table_names())
+        assert database_inspector.get_pk_constraint("rejected_messages")[
+            "constrained_columns"
+        ] == ["topic", "partition", "offset"]
         assert database_inspector.get_pk_constraint("user_identities")[
             "constrained_columns"
         ] == ["issuer", "subject"]
