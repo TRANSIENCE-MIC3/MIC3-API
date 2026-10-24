@@ -32,6 +32,9 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       securityContext:
+        {{- with .Values.podIdentity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
@@ -111,13 +114,19 @@ kind: Service
 metadata:
   name: {{ .Values.name }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.service.type }}
   selector:
     app.kubernetes.io/name: {{ .Values.name }}
   ports:
     - name: s3
       port: 9000
       targetPort: s3
+      {{- if eq .Values.service.type "NodePort" }}
+      nodePort: {{ .Values.service.s3NodePort }}
+      {{- end }}
     - name: console
       port: 9001
       targetPort: console
+      {{- if eq .Values.service.type "NodePort" }}
+      nodePort: {{ .Values.service.consoleNodePort }}
+      {{- end }}

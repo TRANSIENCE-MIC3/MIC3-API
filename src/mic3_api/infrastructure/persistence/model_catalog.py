@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from mic3_api.application.models.catalog import (
     ExecutionDefinition, ModelError, ModelRelease, ReleaseDefinition,
 )
-from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow
+from mic3_api.application.models.catalog_changes import ensure_active_modes_unchanged
+from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
 
 
 class SqlAlchemyModelCatalog:
@@ -30,7 +31,8 @@ class SqlAlchemyModelCatalog:
             release = self._session.scalar(select(ModelReleaseRow).where(
                 ModelReleaseRow.model_id == definition.model_id,
                 ModelReleaseRow.image_digest == definition.image_digest,
-            ).order_by(ModelReleaseRow.created_at, ModelReleaseRow.id))
+            ).order_by(ModelReleaseRow.created_at, ModelReleaseRow.id).with_for_update()
+                .execution_options(populate_existing=True))
             if release is None:
                 release = ModelReleaseRow(
                     model_id=definition.model_id,
@@ -38,6 +40,14 @@ class SqlAlchemyModelCatalog:
                 )
                 self._session.add(release)
             else:
+                active_modes = self._session.scalars(select(Run.parameters["mode"].astext).where(
+                    Run.model_release_id == release.id,
+                    Run.accepted_at.is_not(None), Run.status.in_(("queued", "running")),
+                ).distinct())
+                ensure_active_modes_unchanged(
+                    ExecutionDefinition.from_dict(release.execution_definition),
+                    definition.execution_definition, active_modes,
+                )
                 release.execution_definition = execution
             self._session.flush()
             return self._snapshot(release, model)

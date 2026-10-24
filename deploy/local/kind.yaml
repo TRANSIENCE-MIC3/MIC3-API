@@ -1,0 +1,10 @@
+# kind v0.31.0; keep the node pinned independently of the application release.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mic3-local
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+    extraPortMappings:
+      - {containerPort: 30900, hostPort: 19000, listenAddress: "127.0.0.1"}
+      - {containerPort: 30901, hostPort: 19001, listenAddress: "127.0.0.1"}

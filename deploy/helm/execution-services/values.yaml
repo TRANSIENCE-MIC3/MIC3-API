@@ -1,0 +1,67 @@
+# Supply published repository@sha256 references before enabling either process.
+publisher:
+  replicas: 0
+  image: ""
+  databaseSecret: mic3-publisher-postgres-credentials
+  tlsSecret: mic3-kafka-publisher-tls
+  resources:
+    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi, ephemeral-storage: 256Mi}
+worker:
+  replicas: 0
+  image: ""
+  databaseSecret: mic3-worker-postgres-credentials
+  tlsSecret: mic3-kafka-worker-tls
+  capacity: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 128Mi}
+    limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 512Mi}
+database:
+  host: mic3-postgres
+  port: 5432
+kafka:
+  name: mic3-kafka
+  clusterDomain: cluster.local
+  trustConfigMap: mic3-kafka-trust
+  requestsTopic: mic3.run.requests.v1
+  eventsTopic: mic3.run.events.v1
+  consumerGroup: mic3.execution.worker.v1
+artifactReaderSecret: mic3-artifact-reader-credentials
+imagePullSecrets: [ghcr-pull]
+podIdentity: {}
+nodeSelector:
+  kubernetes.io/os: linux
+  kubernetes.io/arch: amd64
+# Operational values only. Invocation and identity come from the model catalog.
+modelValues:
+  podIdentity: {}
+  imagePullSecrets: [ghcr-pull]
+  nodeSelector:
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+  activeDeadlineSeconds: 600
+  outputSizeLimit: 1Gi
+  model:
+    resources:
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+      limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 2Gi}
+  storage:
+    endpoint: http://mic3-aistor:9000
+    bucket: mic3-artifacts
+    secret: mic3-artifact-uploader-credentials
+networkPolicy:
+  dnsPorts: [53, 5353]
+  databasePeers:
+    - podSelector:
+        matchLabels: {app.kubernetes.io/name: mic3-postgres}
+  kafkaPeers:
+    - podSelector:
+        matchLabels: {app.kubernetes.io/name: mic3-kafka}
+  storagePeers:
+    - podSelector:
+        matchLabels: {app.kubernetes.io/name: mic3-aistor}
+  storagePort: 9000
+  # Set verified API service/backend CIDRs and ports before enabling the worker.
+  # Service DNAT / NetworkPolicy behavior is cluster dependent.
+  apiPeers: []
+  apiPorts: [443, 6443]

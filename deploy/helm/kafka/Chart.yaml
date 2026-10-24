@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mic3-kafka
+description: Independent single-node Kafka for MIC3 development execution
+type: application
+version: 0.1.0
+appVersion: "4.1.1"

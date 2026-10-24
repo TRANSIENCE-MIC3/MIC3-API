@@ -10,7 +10,9 @@ MIC3 will provide a common API to request, track, reuse, and retrieve results
 from independent scientific models. This document records intended architecture;
 [local project status](../../PROJECT_STATUS.md) (Git-ignored) owns implementation order and evidence.
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
-are implemented. Integrated execution, Kafka and result reuse are not yet implemented.
+are implemented, together with local Kafka, outbox publication and a database-backed
+run acceptance and an optional execution worker. Local Kubernetes execution and
+artifact persistence are implemented; EOSC execution deployment and result reuse remain pending.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
 
@@ -40,6 +42,10 @@ flowchart LR
 - **Kafka** is required by the event-driven architecture. A publisher delivers
   committed outbox events; consumers use stable identifiers to load authoritative
   state. Events must not carry user tokens, large datasets, or output files.
+  The acceptance worker advances consumption only after PostgreSQL commits a run
+  outcome or a rejection. Invalid messages are recorded by topic, partition and
+  offset with a controlled diagnostic, without raw payloads. Replayed requests
+  reuse existing acceptance; persistence failures leave Kafka progress unchanged.
 - **The worker** owns model execution orchestration, Kubernetes interaction,
   lifecycle recovery, and output collection. It receives minimal Job RBAC and
   separate database permissions. Workers do not create or migrate schemas.
@@ -63,7 +69,10 @@ flowchart LR
 
 Model-specific execution choices live in the release's `execution_definition`
 JSONB document. It contains a `modes` map; each named mode defines arguments,
-working directory and output directory. EU-MFA initially declares buildings only.
+working directory and output directory. Optional `required_outputs` lists exact
+relative file paths used for output verification; missing or empty lists are valid.
+These requirements are separate from computation identity. EU-MFA initially
+declares buildings only, without a required-output list.
 The application validates mode selection against that release's map and resolves
 its invocation. No Python class repeats EU-MFA's mode names or command paths.
 The contract is language-independent; it can describe Python or GAMS invocations.
@@ -79,14 +88,20 @@ dependencies out of the API and upstream source unchanged.
 The catalog separates `models` from `model_releases`. The pinned image reference
 identifies a model build; no separate display-version field is stored. Operator
 registration inserts a new model/image entry or updates its existing execution
-JSONB and model display name. There are no catalog revisions or update locks
-based on historical runs during this disposable-data stage. Updating the same
+JSONB and model display name. There are no catalog revisions or per-run execution
+snapshots. A mode's invocation and output requirements cannot be changed or removed
+while accepted queued/running runs reference it. Registration and acceptance take
+the same release-row lock to serialize that decision; acceptance locks the release
+before the run. Display names and unrelated modes remain editable. Terminal runs
+do not block edits. Updating the same
 image does not create another release. New image references create new releases.
 Registration does not implicitly delete runs, events or artifacts. Operators must
 remove incompatible old runs/outputs when changing catalog behavior; old run
 fingerprints are not recomputed. This deliberately does not promise historical
-replay after editing a release. Before workers/reuse consume old records, they
-must detect incompatible definitions or those records must be removed.
+replay after editing a release. Acceptance recomputes the saved fingerprint and
+marks incompatible queued runs failed with `execution_definition_changed`.
+Dispatch rechecks compatibility too. Historical records are not
+silently migrated or resubmitted.
 
 `integrations/eu_mfa/release.json` is maintained catalog input, not a runtime
 fallback. PostgreSQL is authoritative after explicit registration. The
@@ -123,9 +138,35 @@ Current submission uses internal `register-model-release`, `submit-run` and
 `show-run` commands. Runs have optional `requested_by` attribution to a MIC3 user;
 anonymous submissions require no synthetic account. Run and outbox inserts share
 one transaction. Events contain stable event/run IDs, type, creation time and a
-nullable publication time; there is no publisher yet. Identical submissions
-remain separate queued runs and events. Artifacts and public run endpoints
-follow with orchestration; attempt tracking is deferred. The CLI requires operator database access.
+nullable publication time. A separate publisher sends acknowledged, versioned
+`run.requested` records to Kafka and records publication in PostgreSQL; replay
+after acknowledgement but before database commit retains the same event ID.
+Identical submissions remain separate queued runs and events. Terminal
+`run.succeeded`/`run.failed` events use `mic3.run.events.v1`; requests use
+`mic3.run.requests.v1`. Public run endpoints and attempt tracking are deferred.
+The CLI requires operator database access.
+
+Acceptance uses the existing `runs` record: nullable `accepted_at` records durable
+acceptance, and nullable `failure_code` records a controlled failure reason.
+It creates no separate execution identifier or specification JSON. Repeated
+acceptance returns the existing outcome; running/terminal runs are never made
+eligible again. A matching queued run stays queued after acceptance until a
+dispatcher starts it. Database errors roll back without marking the run failed.
+The worker runs acceptance only by default; `--execute` also enables a supervised
+execution loop. PostgreSQL serializes capacity allocation (default one), protects
+per-run reconciliation, and stores dispatch intent before Job creation. Runs keep
+their namespace, Job UID and completion time; there are no execution snapshots.
+Jobs use `mic3-run-<run UUID>` and are adopted only after identity/specification
+checks. A missing recorded Job is a failure, never an automatic scientific rerun.
+
+Output verification requires successful model/upload completion and at least
+one nonempty uploaded file by default. Where `required_outputs` is supplied, all
+listed files must also exist and be nonempty; additional files are permitted.
+This checks artifact availability, not scientific correctness. The copy container
+skips transfer for an empty directory, leaving the worker to report the output
+contract failure. Read-only storage access supplies keys and sizes; ETags are not
+checksums. Terminal state, collected artifact references and a terminal outbox
+event commit together. Completed Jobs remain available for inspection.
 
 ```mermaid
 sequenceDiagram
