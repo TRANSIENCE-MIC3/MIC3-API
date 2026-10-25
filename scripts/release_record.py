@@ -134,11 +134,15 @@ def main():
         verify_remote(images)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write('image_ref='+images['api']['image_ref']+'\n')
+            output.write('execution_available='+str('worker' in images).lower()+'\n')
+            for role in ('publisher', 'worker'):
+                output.write(role+'_image_ref='+images.get(role, {}).get('image_ref', '')+'\n')
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
             summary.write(f'Release: `{tag}`\n\n')
             for role, image in images.items():
                 summary.write(f'{role}: `{image["image_ref"]}`\n\n')
-            summary.write('Only the API is deployed automatically. Execution-service updates remain manual.\n')
+            if 'worker' not in images:
+                summary.write('Legacy record: execution not deployed or verified.\n')
 
 
 if __name__ == '__main__':

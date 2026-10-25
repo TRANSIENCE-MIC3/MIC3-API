@@ -4,12 +4,16 @@ MIC3's FastAPI control plane for a platform that will execute independent
 scientific models. The current service provides PostgreSQL-backed profiles,
 Keycloak OIDC authentication, and local member/admin authorization, locally and
 on EOSC/OKD. A public model catalog and operator CLI support a configurable model
-release catalog and durable queued submissions. A separate local outbox publisher
+release catalog and durable queued submissions. A separate outbox publisher
 forwards committed requests to Kafka; a separate worker records durable acceptance
 or message rejection in PostgreSQL. With `--execute`, the worker dispatches and
 recovers Kubernetes Jobs, verifies uploaded artifacts, and persists outcomes.
-Local kind/AIStor execution uses the same model and storage charts as EOSC;
-deployment of Kafka and the execution services on EOSC remains pending.
+Kafka and the execution services are deployed on EOSC, where a buildings run and
+uploaded outputs have been verified by the operator. Local kind/AIStor execution
+uses the same model and storage charts. Authenticated API run submission is the
+next milestone; execution currently starts through the operator CLI. Release
+automation deploys all three services and checks a small diagnostic run through
+Kafka and artifact storage after the one-time deployment bootstrap.
 
 ## Local quickstart
 
