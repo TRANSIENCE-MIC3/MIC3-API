@@ -62,5 +62,5 @@ temporary database/TLS identities, and preserves AIStor objects under fresh run
 UUIDs. It requires local packaged images and existing `mic3-local` storage Secrets.
 Kind results do not establish EOSC admission, cert-manager issuance or network
 policy enforcement. EOSC execution is deployed at application release 0.1.9;
-see the [runbook](../../../docs/setup-and-deployment.md) for manual workload updates
+see the [runbook](../../../docs/setup-and-deployment.md) for automated workload updates
 and the API-server egress rule verified during rollout.

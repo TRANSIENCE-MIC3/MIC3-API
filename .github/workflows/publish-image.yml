@@ -1,4 +1,4 @@
-name: Publish services and deploy API
+name: Publish and deploy services
 
 on:
   push:
@@ -36,6 +36,9 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       version: ${{ steps.source.outputs.version }}
       image_ref: ${{ steps.image.outputs.image_ref }}
+      publisher_image_ref: ${{ steps.image.outputs.publisher_image_ref }}
+      worker_image_ref: ${{ steps.image.outputs.worker_image_ref }}
+      execution_available: ${{ steps.image.outputs.execution_available }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -135,8 +138,8 @@ jobs:
         if: steps.record.outputs.build_required == 'true'
         run: |
           gh release create "$RELEASE_TAG" "$RUNNER_TEMP/release.json" --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --title "$RELEASE_TAG" --notes 'API, publisher and worker images published. Only the API is deployed automatically; see Actions for results.'
-      - name: Validate release record and pass only API image to deployment
+            --verify-tag --title "$RELEASE_TAG" --notes 'API, publisher and worker images published. See Actions for deployment and execution verification results.'
+      - name: Validate release record and export deployment images
         id: image
         env:
           COMMIT: ${{ steps.source.outputs.commit }}
@@ -146,13 +149,17 @@ jobs:
     name: Deploy to EOSC
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     environment: eosc-development
     concurrency:
       group: eosc-development
       cancel-in-progress: false
     env:
       IMAGE_REF: ${{ needs.prepare.outputs.image_ref }}
+      PUBLISHER_IMAGE_REF: ${{ needs.prepare.outputs.publisher_image_ref }}
+      WORKER_IMAGE_REF: ${{ needs.prepare.outputs.worker_image_ref }}
+      EXECUTION_AVAILABLE: ${{ needs.prepare.outputs.execution_available }}
+      EXECUTION_API_CIDRS: ${{ vars.EXECUTION_API_CIDRS }}
       VERSION: ${{ needs.prepare.outputs.version }}
       COMMIT: ${{ needs.prepare.outputs.commit }}
       OPENSHIFT_SERVER: ${{ vars.OPENSHIFT_SERVER }}
@@ -165,6 +172,20 @@ jobs:
           # Use deployment instructions from this workflow, independently of the application tag.
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install verified Helm and delivery dependencies
+        if: env.EXECUTION_AVAILABLE == 'true'
+        run: |
+          python -m pip install PyYAML==6.0.3
+          mkdir -p "$RUNNER_TEMP/helm-client"
+          cd "$RUNNER_TEMP/helm-client"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz -o helm.tar.gz
+          echo '86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tar.gz' | sha256sum --check -
+          tar -xzf helm.tar.gz linux-amd64/helm
+          echo "$RUNNER_TEMP/helm-client/linux-amd64" >> "$GITHUB_PATH"
       - name: Install OpenShift client
         run: |
           mkdir -p "$RUNNER_TEMP/oc-client"
@@ -212,6 +233,11 @@ jobs:
           done
           oc --request-timeout=20s apply --dry-run=server -f "$RUNNER_TEMP/application.json"
           oc --request-timeout=20s create --dry-run=server -f "$RUNNER_TEMP/migration.json"
+      - name: Render and preflight execution delivery
+        if: env.EXECUTION_AVAILABLE == 'true'
+        run: |
+          python scripts/execution_delivery.py render --directory "$RUNNER_TEMP"
+          python scripts/execution_delivery.py preflight --directory "$RUNNER_TEMP"
       - name: Run database migration
         id: migrate
         run: |
@@ -240,6 +266,15 @@ jobs:
           deadline=$((SECONDS + 660))
           state=$(wait_job "job/$job")
           [[ "$state" == Complete ]] || { echo "Migration $job failed." >&2; exit 1; }
+      - name: Upgrade execution services and verify rollout
+        id: execution
+        if: env.EXECUTION_AVAILABLE == 'true'
+        run: |
+          helm upgrade mic3-execution deploy/helm/execution-services \
+            --namespace "$OPENSHIFT_NAMESPACE" --reset-values \
+            -f deploy/okd/execution.values.yaml -f "$RUNNER_TEMP/execution-overrides.json" \
+            --wait=legacy --timeout 5m --history-max 10
+          python scripts/execution_delivery.py verify --directory "$RUNNER_TEMP"
       - name: Apply API and wait for rollout
         id: rollout
         run: |
@@ -258,6 +293,47 @@ jobs:
           curl --fail --silent --show-error --max-time 15 --retry 2 "$issuer/.well-known/openid-configuration" > "$RUNNER_TEMP/discovery.json"
           jq -e --arg issuer "$issuer" '.issuer == $issuer and (.jwks_uri | startswith("https://"))' "$RUNNER_TEMP/discovery.json"
           curl --fail --silent --show-error --max-time 15 --retry 2 "$(jq -r .jwks_uri "$RUNNER_TEMP/discovery.json")" | jq -e '.keys | length > 0'
+      - name: Verify end-to-end execution
+        id: verification
+        if: env.EXECUTION_AVAILABLE == 'true'
+        run: |
+          job=$(oc --request-timeout=20s create -f "$RUNNER_TEMP/verification.json" -o jsonpath='{.metadata.name}')
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+          deadline=$((SECONDS + 1020))
+          while (( SECONDS < deadline )); do
+            state=$(oc --request-timeout=20s get "job/$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}')
+            case "$state" in
+              *Failed*) echo 'Execution verification failed; inspect retained run.' >&2; exit 1 ;;
+              *Complete*) exit 0 ;;
+            esac
+            sleep 5
+          done
+          echo 'Verification Job timed out; inspect retained run.' >&2
+          exit 1
+      - name: Collect execution diagnostics
+        if: always() && env.EXECUTION_AVAILABLE == 'true'
+        env:
+          VERIFICATION_JOB: ${{ steps.verification.outputs.job }}
+        run: |
+          [[ -f "$RUNNER_TEMP/eosc-kubeconfig" ]] || exit 0
+          for role in api publisher worker; do
+            oc --request-timeout=20s get "deployment/mic3-$role" \
+              -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[*].image,READY:.status.readyReplicas' || true
+            oc --request-timeout=20s logs "deployment/mic3-$role" --all-containers=true --tail=100 || true
+          done
+          helm status mic3-execution -o json | jq '{name,version,status:.info.status}' || true
+          oc --request-timeout=20s get events --sort-by=.metadata.creationTimestamp | tail -n 40 || true
+          if [[ -n "$VERIFICATION_JOB" ]]; then
+            oc --request-timeout=20s logs "job/$VERIFICATION_JOB" --tail=100 > "$RUNNER_TEMP/verification.log" || true
+            cat "$RUNNER_TEMP/verification.log"
+            run_id=$(jq -Rr 'fromjson? | .run_id // empty' "$RUNNER_TEMP/verification.log" | head -n 1)
+            echo "Diagnostic run: ${run_id:-unavailable}; Job: $VERIFICATION_JOB" >> "$GITHUB_STEP_SUMMARY"
+            oc --request-timeout=20s get "job/$VERIFICATION_JOB" -o json | jq '{name:.metadata.name,status}' || true
+            # Retain indefinitely if log retrieval failed; otherwise allow diagnostics a day.
+            if [[ -s "$RUNNER_TEMP/verification.log" ]]; then
+              oc --request-timeout=20s patch "job/$VERIFICATION_JOB" --type=merge -p '{"spec":{"ttlSecondsAfterFinished":86400}}' || true
+            fi
+          fi
       - name: Collect migration logs
         if: always() && steps.migrate.outputs.job != ''
         env:
@@ -273,17 +349,24 @@ jobs:
           MIGRATION_RESULT: ${{ steps.migrate.outcome }}
           ROLLOUT_RESULT: ${{ steps.rollout.outcome }}
           SMOKE_RESULT: ${{ steps.smoke.outcome }}
+          EXECUTION_RESULT: ${{ steps.execution.outcome }}
+          VERIFICATION_RESULT: ${{ steps.verification.outcome }}
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           Release: $RELEASE_TAG
           Application commit: $COMMIT
           Deployment workflow commit: $GITHUB_WORKFLOW_SHA
           Image: $IMAGE_REF
+          Publisher: $PUBLISHER_IMAGE_REF
+          Worker: $WORKER_IMAGE_REF
           Namespace: $OPENSHIFT_NAMESPACE
           Migration Job: $MIGRATION_JOB
 
-          | Migration | Rollout | Public checks | Overall |
-          | --- | --- | --- | --- |
-          | $MIGRATION_RESULT | $ROLLOUT_RESULT | $SMOKE_RESULT | $JOB_RESULT |
+          | Migration | Execution rollout | API rollout | Public checks | Execution verification | Overall |
+          | --- | --- | --- | --- | --- | --- |
+          | $MIGRATION_RESULT | $EXECUTION_RESULT | $ROLLOUT_RESULT | $SMOKE_RESULT | $VERIFICATION_RESULT | $JOB_RESULT |
           EOF
+          if [[ "$EXECUTION_AVAILABLE" != true ]]; then
+            echo 'Legacy record: execution not deployed or verified.' >> "$GITHUB_STEP_SUMMARY"
+          fi
           rm -f "$RUNNER_TEMP/eosc-kubeconfig" "$RUNNER_TEMP/eosc-ca.pem"

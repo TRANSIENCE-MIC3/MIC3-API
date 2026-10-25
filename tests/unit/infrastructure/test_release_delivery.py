@@ -113,7 +113,7 @@ def test_legacy_record_returns_only_api():
 
 
 @pytest.mark.parametrize('legacy', [False, True])
-def test_reuse_validates_remote_references_and_exports_only_api(monkeypatch,tmp_path,legacy):
+def test_reuse_validates_remote_references_and_exports_available_images(monkeypatch,tmp_path,legacy):
     data=record()
     if legacy:
         data={'format_version':1,'release_tag':TAG,'commit':COMMIT,**data['images']['api']}
@@ -124,7 +124,11 @@ def test_reuse_validates_remote_references_and_exports_only_api(monkeypatch,tmp_
     monkeypatch.setenv('GITHUB_OUTPUT',str(output)); monkeypatch.setenv('GITHUB_STEP_SUMMARY',str(summary))
     monkeypatch.setattr('sys.argv',['release_record.py','validate','--record',str(path)])
     release.main()
-    assert output.read_text()=='image_ref='+record()['images']['api']['image_ref']+'\n'
+    outputs = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert outputs['image_ref'] == record()['images']['api']['image_ref']
+    assert outputs['execution_available'] == str(not legacy).lower()
+    for role in ('publisher', 'worker'):
+        assert outputs[role+'_image_ref'] == ('' if legacy else record()['images'][role]['image_ref'])
     assert len(registry.calls)==(1 if legacy else 3)
     assert all(args[:3]==('docker','manifest','inspect') for args in registry.calls)
     assert not registry.pushed
@@ -171,7 +175,7 @@ def test_remote_failure_produces_no_record_or_deployment_output(monkeypatch,tmp_
     if operation=='publish': assert not path.exists()
 
 
-def test_workflow_gates_publication_and_only_deploys_api():
+def test_workflow_gates_publication_and_deployment_stages():
     workflow=yaml.load((ROOT/'.github/workflows/publish-image.yml').read_text(),Loader=yaml.BaseLoader)
     prepare=workflow['jobs']['prepare']; deploy=workflow['jobs']['deploy']
     assert prepare['timeout-minutes']=='60'
@@ -187,7 +191,19 @@ def test_workflow_gates_publication_and_only_deploys_api():
     assert 'MIC3_EXECUTION_SERVICES_SMOKE' not in steps[smoke]['env']
     assert deploy['needs']=='prepare' and deploy.get('if') is None
     assert deploy['env']['IMAGE_REF']=='${{ needs.prepare.outputs.image_ref }}'
-    assert not any('publisher' in s.get('run','') or 'worker' in s.get('run','') for s in deploy['steps'])
+    stages = [s.get('name') for s in deploy['steps']]
+    ordered = ['Render and preflight execution delivery', 'Run database migration',
+               'Upgrade execution services and verify rollout', 'Apply API and wait for rollout',
+               'Verify public endpoints', 'Verify end-to-end execution']
+    assert [stages.index(s) for s in ordered] == sorted(stages.index(s) for s in ordered)
+    for name in ordered:
+        step = deploy['steps'][stages.index(name)]
+        assert 'always()' not in step.get('if', '')  # failures stop subsequent mutations
+    for name in [ordered[0], ordered[2], ordered[-1]]:
+        assert deploy['steps'][stages.index(name)]['if'] == "env.EXECUTION_AVAILABLE == 'true'"
+    upgrade = deploy['steps'][stages.index(ordered[2])]['run']
+    assert '--reset-values' in upgrade and '--wait=legacy' in upgrade
+    assert '--install' not in upgrade and '--rollback-on-failure' not in upgrade
     assert prepare['concurrency']['cancel-in-progress']=='false'
     assert deploy['concurrency']['group']=='eosc-development'
     helm=names.index('Install verified Helm for chart tests'); tests=names.index('Run unit and integration tests')

@@ -2,5 +2,5 @@ apiVersion: v2
 name: execution-services
 description: MIC3 outbox publisher and execution worker
 type: application
-version: 0.1.0
-appVersion: "0.1.9"
+version: 0.1.1
+appVersion: "0.1.10"

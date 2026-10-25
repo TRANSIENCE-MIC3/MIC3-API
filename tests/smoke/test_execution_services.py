@@ -6,6 +6,7 @@ Prerequisites: local worker/publisher images, kind, kubectl, Helm, provisioned
 mic3-local AIStor and its reader/uploader Secrets, cached model/copy images.
 """
 import base64
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -119,6 +120,7 @@ def test_packaged_execution_and_recovery(tmp_path):
 
     publisher = load(os.getenv('MIC3_PUBLISHER_IMAGE','mic3-publisher:packaging-check'))
     worker = load(os.getenv('MIC3_WORKER_IMAGE','mic3-worker:packaging-check'))
+    api = load(os.getenv('MIC3_API_IMAGE','mic3-api:packaging-check'))
     postgres = load('postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280')
     load('apache/kafka:4.1.1')
     command([*base,'create','namespace',namespace])
@@ -158,6 +160,7 @@ def test_packaged_execution_and_recovery(tmp_path):
         # Temporary roles are created only inside this isolated fixture database.
         for role in ['publisher','worker']:
             secret('mic3-'+role+'-postgres-credentials',{'database':'mic3','username':role,'password':password})
+        secret('mic3-postgres-credentials',{'database':'mic3','username':'postgres','password':password})
         sql = f"CREATE ROLE publisher LOGIN PASSWORD '{password}'; CREATE ROLE worker LOGIN PASSWORD '{password}'; "
         sql += ('REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO publisher, worker; '
                 'GRANT SELECT, UPDATE ON outbox_events TO publisher; '
@@ -175,7 +178,36 @@ def test_packaged_execution_and_recovery(tmp_path):
             'networkPolicy':{'apiPeers':[{'ipBlock':{'cidr':api_ip+'/32'}}],
                 'storagePeers':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'mic3-local'}},
                                  'podSelector':{'matchLabels':{'app.kubernetes.io/name':'mic3-aistor'}}}]}}
-        apply(render('execution-services',values))
+        values['delivery'] = {'version':'0.1.9','commit':'c'*40}
+        execution_values = tmp_path/'execution-values.yaml'
+        execution_values.write_text(yaml.safe_dump(values))
+        command(['helm','install','mic3-execution',ROOT/'deploy/helm/execution-services',
+                 '--kubeconfig',kubeconfig,'--kube-context',context,'-n',namespace,'-f',execution_values])
+        bootstrap = yaml.safe_load((ROOT/'deploy/okd/deployer-template.yaml').read_text())['objects']
+        for obj in bootstrap:
+            if obj['kind']=='RoleBinding': obj['subjects'][0]['namespace']=namespace
+        apply(bootstrap)
+        # Exercise Helm with an actual short-lived deployer token, not admin credentials.
+        token = command([*k,'create','token','mic3-github-deployer','--duration=15m'])
+        deployer_config = tmp_path/'deployer-kubeconfig'
+        isolated = {'apiVersion':'v1','kind':'Config','clusters':config['clusters'],
+            'users':[{'name':'deployer','user':{'token':token}}],
+            'contexts':[{'name':'delivery','context':{'cluster':config['clusters'][0]['name'],
+                         'user':'deployer','namespace':namespace}}],'current-context':'delivery'}
+        # config view normally redacts CA data; retrieve only public cluster trust.
+        isolated['clusters'] = json.loads(command([*base,'config','view','--minify','--raw',
+            '-o','jsonpath={.clusters}']))
+        deployer_config.write_text(yaml.safe_dump(isolated))
+        def upgrade():
+            execution_values.write_text(yaml.safe_dump(values))
+            command(['helm','upgrade','mic3-execution',ROOT/'deploy/helm/execution-services',
+                '--kubeconfig',deployer_config,'-n',namespace,'--reset-values','-f',execution_values,
+                '--wait=legacy','--timeout','3m'],timeout=200)
+        for verb,resource in [('patch','deployment/unrelated'),('patch','role/unrelated'),
+                              ('create','clusterroles'),('create','deployments')]:
+            denied = subprocess.run(['kubectl','--kubeconfig',str(deployer_config),'auth','can-i',verb,resource],
+                                    capture_output=True,text=True)
+            assert denied.stdout.strip()=='no'
         # Real API authorization, using admin impersonation of each exact account.
         for role,verb,resource,expected in [('publisher','create','jobs','no'),('publisher','get','jobs','no'),
             ('worker','create','jobs','yes'),('worker','get','jobs','yes'),('worker','list','pods','yes'),
@@ -193,7 +225,7 @@ def test_packaged_execution_and_recovery(tmp_path):
         release_id = cli('register-model-release','--config','/tmp/release.json')['id']
         run_id = cli('submit-run','--release-id',release_id,'--parameters','/tmp/params.json')['id']
         values['publisher']['replicas'] = values['worker']['replicas'] = 1
-        apply(render('execution-services',values))
+        upgrade()
         command([*k,'rollout','status','deployment/mic3-worker','--timeout=120s'])
         command([*k,'rollout','status','deployment/mic3-publisher','--timeout=120s'])
         rejection_probe = '''
@@ -231,7 +263,8 @@ engine.dispose()
         assert not active_job.get('status',{}).get('completionTime'), 'Restart must occur during execution'
         old_pods = json.loads(command([*k,'get','pods','-l','app.kubernetes.io/name=mic3-worker','-o','json']))
         old_uid = old_pods['items'][0]['metadata']['uid']
-        command([*k,'delete','pod','-l','app.kubernetes.io/name=mic3-worker','--grace-period=0','--force'])
+        values['delivery'] = {'version':'0.1.10','commit':'d'*40}
+        upgrade()
         def restarted():
             pods = json.loads(command([*k,'get','pods','-l','app.kubernetes.io/name=mic3-worker','-o','json']))
             return any(p['metadata']['uid']!=old_uid and p.get('status',{}).get('phase')=='Running' for p in pods['items'])
@@ -264,6 +297,16 @@ for operation in ['put_object','delete_object']:
 storage.close()
 '''.replace('ARTIFACT',repr(artifact))
         command([*k,'exec','deployment/mic3-worker','--','python','-c',storage_probe])
+        spec = importlib.util.spec_from_file_location('delivery_smoke',ROOT/'scripts/execution_delivery.py')
+        delivery = importlib.util.module_from_spec(spec); spec.loader.exec_module(delivery)
+        effective = delivery.merge(yaml.safe_load((ROOT/'deploy/helm/execution-services/values.yaml').read_text()),values)
+        diagnostic = delivery.verification_job({'IMAGE_REF':api,'WORKER_IMAGE_REF':worker,
+            'VERSION':'0.1.10','COMMIT':'d'*40},effective)
+        check_job = json.loads(command(['kubectl','--kubeconfig',deployer_config,'create','-f','-','-o','json'],
+                                      json.dumps(diagnostic)))['metadata']['name']
+        command([*k,'wait','--for=condition=complete','job/'+check_job,'--timeout=180s'],timeout=200)
+        (evidence/'deployment-check.log').write_text(command([*k,'logs','job/'+check_job]))
+        upgrade()  # same-version Helm retry preserves service recovery and identity
         (evidence/'results.json').write_text(json.dumps(result,indent=2))
         print('Packaged kind evidence:',evidence)
     finally:
