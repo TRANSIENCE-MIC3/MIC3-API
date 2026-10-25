@@ -91,6 +91,29 @@ The bootstrap verifies **all three live images** against the trusted record befo
 annotating publisher/worker metadata, using resource-version checks to reject
 concurrent changes. It does not restart Pods. Replace the record path if the
 current installed release differs. Never relabel an unknown/mixed installation.
+Bootstrap seeds the annotations then releases only its ownership of those three
+fields, leaving their values intact for Helm to adopt. Merely naming an annotation
+writer `helm` is insufficient: Kubernetes distinguishes Update and Apply ownership.
+Preflight uses server-side apply as Helm to detect conflicts before migrations.
+
+If bootstrap was run with the older script and an upgrade reports conflicts with
+`kubectl-annotate` on the three `delivery.mic3.io/*` annotations, wait until the
+Actions run has stopped. With the corrected local script and the record matching
+the **currently installed images**, run:
+
+```powershell
+python scripts/bootstrap_execution_identity.py --record deploy/okd/secrets/release-0.1.9.json --apply --repair-ownership
+```
+
+This revalidates all three live images and removes only the three verified keys'
+bootstrap ownership entries from `managedFields`, guarded by resource version.
+Annotation values, Pod templates, images, unrelated ownership and annotations stay
+unchanged. Unknown owners are rejected; existing Helm Apply ownership is preserved.
+This is a narrowly scoped recovery, not a reset of `managedFields`. If interrupted,
+rerun the command. Do not run concurrent delivery during the handoff. Then rerun the failed
+Actions jobs for the same release: a terminal `failed` Helm revision is retryable.
+No image rebuild, tag change, database downgrade or blanket `--force-conflicts`
+is needed for this one-time repair.
 
 The deployer can update only named execution resources and the API Deployment.
 Helm Secret storage requires namespace-wide Secret get/list/create/update/delete;

@@ -152,7 +152,8 @@ def preflight(directory):
             require_permission(verb, resource)
     # No printing of Helm release contents or Secret data. Server admission is checked
     # for each existing rendered resource and for the future verification Job.
-    oc('apply', '--dry-run=server', '-f', str(directory/'execution.yaml'))
+    oc('apply', '--server-side', '--field-manager=helm', '--dry-run=server',
+       '-f', str(directory/'execution.yaml'))
     oc('create', '--dry-run=server', '-f', str(directory/'verification.json'))
 
 
