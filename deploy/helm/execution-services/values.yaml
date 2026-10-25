@@ -1,4 +1,7 @@
 # Supply published repository@sha256 references before enabling either process.
+delivery:
+  version: ""
+  commit: ""
 publisher:
   replicas: 0
   image: ""

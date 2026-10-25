@@ -29,6 +29,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mic3-{{ $role }}
+  {{- if $.Values.delivery.version }}
+  annotations:
+    delivery.mic3.io/version: {{ $.Values.delivery.version | quote }}
+    delivery.mic3.io/commit: {{ required "delivery.commit is required with version" $.Values.delivery.commit | quote }}
+    delivery.mic3.io/image: {{ $service.image | quote }}
+  {{- end }}
 spec:
   replicas: {{ $service.replicas }}
   strategy:

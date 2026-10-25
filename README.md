@@ -11,7 +11,9 @@ recovers Kubernetes Jobs, verifies uploaded artifacts, and persists outcomes.
 Kafka and the execution services are deployed on EOSC, where a buildings run and
 uploaded outputs have been verified by the operator. Local kind/AIStor execution
 uses the same model and storage charts. Authenticated API run submission is the
-next milestone; execution currently starts through the operator CLI.
+next milestone; execution currently starts through the operator CLI. Release
+automation deploys all three services and checks a small diagnostic run through
+Kafka and artifact storage after the one-time deployment bootstrap.
 
 ## Local quickstart
 

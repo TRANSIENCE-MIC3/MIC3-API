@@ -1,0 +1,19 @@
+# Reviewed EOSC configuration. Images and API Service CIDRs come from delivery.
+publisher:
+  replicas: 1
+  databaseSecret: mic3-publisher-postgres-credentials
+  tlsSecret: mic3-kafka-publisher-tls
+worker:
+  replicas: 1
+  capacity: 1
+  databaseSecret: mic3-worker-postgres-credentials
+  tlsSecret: mic3-kafka-worker-tls
+artifactReaderSecret: mic3-artifact-reader-credentials
+imagePullSecrets: [ghcr-pull]
+networkPolicy:
+  apiPeers:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: openshift-kube-apiserver
+      podSelector: {}
+  apiPorts: [443, 6443]
