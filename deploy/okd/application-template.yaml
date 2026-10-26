@@ -9,6 +9,10 @@ parameters:
   required: true
 - name: SOURCE_COMMIT
   required: true
+- name: RUN_MAX_ACTIVE_PER_USER
+  value: '5'
+- name: RUN_MAX_ACTIVE_GLOBAL
+  value: '20'
 objects:
 - apiVersion: apps/v1
   kind: Deployment
@@ -55,6 +59,10 @@ objects:
           - name: http
             containerPort: 8000
           env:
+          - name: RUN_MAX_ACTIVE_PER_USER
+            value: ${RUN_MAX_ACTIVE_PER_USER}
+          - name: RUN_MAX_ACTIVE_GLOBAL
+            value: ${RUN_MAX_ACTIVE_GLOBAL}
           - name: APP_ENV
             value: development
           - name: DB_HOST

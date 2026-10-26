@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from mic3_api.application.models.catalog import Catalog
 from mic3_api.application.runs.fingerprint import fingerprint
+from mic3_api.application.users import CurrentUser
 
 
 @dataclass(frozen=True)
@@ -37,3 +38,13 @@ class SubmitRun:
                         fingerprint(release.definition, effective))
         self._store.save_requested(run)
         return run
+
+
+class SubmitOwnRun:
+    """Derive ownership only from the resolved, active MIC3 identity."""
+
+    def __init__(self, submit: SubmitRun):
+        self._submit = submit
+
+    def execute(self, user: CurrentUser, release_id: UUID, parameters: object) -> QueuedRun:
+        return self._submit.execute(release_id, parameters, requested_by=user.id)

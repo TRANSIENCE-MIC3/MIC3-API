@@ -10,8 +10,9 @@ or message rejection in PostgreSQL. With `--execute`, the worker dispatches and
 recovers Kubernetes Jobs, verifies uploaded artifacts, and persists outcomes.
 Kafka and the execution services are deployed on EOSC, where a buildings run and
 uploaded outputs have been verified by the operator. Local kind/AIStor execution
-uses the same model and storage charts. Authenticated API run submission is the
-next milestone; execution currently starts through the operator CLI. Release
+uses the same model and storage charts. Authenticated users can submit runs with
+`POST /runs`, inspect owned runs with `GET /runs/{id}`, and list their history with
+`GET /runs`; admins may inspect any run by ID. The operator CLI remains available. Release
 automation deploys all three services and checks a small diagnostic run through
 Kafka and artifact storage after the one-time deployment bootstrap.
 

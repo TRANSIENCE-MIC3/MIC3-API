@@ -7,9 +7,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from mic3_api.application.models.catalog import (
-    ExecutionDefinition, ModelError, ModelRelease, ReleaseDefinition,
+    ExecutionDefinition, ModelRelease, ReleaseDefinition,
 )
 from mic3_api.application.models.catalog_changes import ensure_active_modes_unchanged
+from mic3_api.application.models.errors import ModelReleaseNotFound
 from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
 
 
@@ -58,7 +59,7 @@ class SqlAlchemyModelCatalog:
                 ModelReleaseRow.id == release_id,
             )).one_or_none()
             if row is None:
-                raise ModelError("Model release does not exist.")
+                raise ModelReleaseNotFound("Model release does not exist.")
             return self._snapshot(*row)
 
     def list_releases(self) -> list[ModelRelease]:

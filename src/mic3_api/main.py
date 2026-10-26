@@ -43,6 +43,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.database = app_database
+    app.state.settings = app_settings
     app.state.token_validator = app_token_validator
     app.include_router(api_router)
     return app

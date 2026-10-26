@@ -38,6 +38,8 @@ class Settings(DatabaseSettings):
 
     app_env: str = "development"
     app_name: str = "mic3-api"
+    run_max_active_per_user: int = Field(default=5, gt=0)
+    run_max_active_global: int = Field(default=20, gt=0)
     oidc_issuer_url: str
     oidc_audience: str
     oidc_allowed_algorithms: tuple[str, ...] = ("RS256",)

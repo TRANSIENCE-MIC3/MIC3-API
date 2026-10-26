@@ -3,21 +3,32 @@
 from dataclasses import asdict
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from mic3_api.application.models.catalog import ModelError
 from mic3_api.application.runs.submission import QueuedRun
+from mic3_api.application.runs.admission import RunAdmissionLimits
 from mic3_api.infrastructure.persistence.execution import OutboxEvent, Run, RunArtifact
 from mic3_api.infrastructure.persistence.users import User
 
+ADMISSION_LOCK = 7523190402
+
 
 class SqlAlchemyRunSubmissions:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, limits: RunAdmissionLimits | None = None) -> None:
         self._session = session
+        self._limits = limits
 
     def save_requested(self, run: QueuedRun) -> None:
         with self._session.begin():
+            if self._limits is not None:
+                # Separate from execution capacity; held until both inserts commit.
+                self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMISSION_LOCK})
+                active = select(func.count()).select_from(Run).where(Run.status.in_(("queued", "running")))
+                total = self._session.scalar(active)
+                owned = self._session.scalar(active.where(Run.requested_by == run.requested_by))
+                self._limits.check(owned, total)
             if run.requested_by is not None and self._session.get(User, run.requested_by) is None:
                 raise ModelError("The requested_by MIC3 user does not exist.")
             self._session.add(Run(**asdict(run)))

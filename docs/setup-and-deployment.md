@@ -2,8 +2,62 @@
 
 Local startup: [README](../README.md#local-quickstart). Kafka and worker setup:
 [Kafka guide](../deploy/local/kafka/README.md). EOSC now runs the API, Kafka,
-publisher, worker and AIStor. Submission currently uses the operator CLI;
-authenticated API submission is the next milestone.
+publisher, worker and AIStor. Authenticated API submission and the operator CLI
+share the same durable execution flow.
+
+## Run API through Postman
+
+Obtain an access token using the login instructions below. Set Bearer Token
+authorization on the run requests and use your configured API base URL.
+
+1. Call public `GET /models` and copy the desired EU-MFA release UUID.
+2. Send `POST /runs` with JSON content type and this body:
+
+   ```json
+   {"model_release_id": "<release UUID>", "parameters": {"mode": "buildings"}}
+   ```
+
+3. A `202` response supplies the queued run ID and a relative `Location` header.
+   Call `GET /runs/{id}` to inspect it. A successful submission means the run and
+   outbox event committed, even if Kafka or the worker is temporarily unavailable.
+4. Call `GET /runs?limit=50&offset=0` for your own history, newest first. The maximum
+   page size is 100. Concurrent submissions can shift offset-based pages.
+
+Run detail is available to its owner or an active admin; admins can also inspect
+unattributed CLI runs. Listing always returns only the caller's runs. Ownership
+comes from the token's resolved MIC3 account, never from request JSON. Unknown
+request fields are rejected; parameters currently support only `mode`.
+
+Statuses are `queued`, `running`, `succeeded`, and `failed`. `accepted_at` identifies
+worker acceptance while a run can still be queued; `running` begins at dispatch
+intent, before the model process necessarily starts. Detail includes lifecycle
+timestamps, a controlled failure code, and recorded artifact names/sizes. File
+names are basenames and may repeat for different output directories. Metadata
+does not check current storage availability, and failed runs may include collected
+files. Storage locations, download links, cluster identifiers and outbox records
+are not exposed. List items omit artifacts.
+
+`RUN_MAX_ACTIVE_PER_USER` (default 5) and `RUN_MAX_ACTIVE_GLOBAL` (default 20) bound
+API admission of queued/running work, including work not yet accepted by the
+worker. Configure positive integers in the API environment; the OKD application
+template exposes matching parameters. All existing runs count toward the global
+bound. CLI submissions retain an operator bypass and can exceed these bounds.
+Admins submitting through the API obey the same limits. Limit rejection returns
+`429`; terminal runs release capacity. Repeating POST creates a new run, so do not
+automatically retry an ambiguous submission response.
+
+Missing/invalid authentication returns `401`, inactive accounts or forbidden
+run access `403`, missing runs/releases `404`, invalid input `422`, and unavailable
+authentication/database dependencies `503`. No schema migration is needed for
+these routes. SSE is deferred to the next commit; the reusable authorized snapshot
+query supports current-state updates, not replay of every transition.
+
+An opt-in smoke test submits **one real buildings execution** and waits for success:
+set `API_BASE_URL`, `OIDC_ACCESS_TOKEN`, `RUN_MODEL_RELEASE_ID`, and
+`RUN_EXECUTION_SMOKE=1`, then run `python -m pytest tests/smoke/test_runs.py -v -s`.
+`RUN_SMOKE_TIMEOUT_SECONDS` defaults to 1800. A timeout does not cancel the run;
+keep its printed ID for inspection. Run this only against an intended environment
+after release approval.
 
 ## Releases
 
