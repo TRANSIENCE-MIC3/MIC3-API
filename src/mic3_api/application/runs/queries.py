@@ -1,20 +1,16 @@
-"""Authorized, materialized run snapshots shared by HTTP and future streaming."""
+"""Authorized, materialized run snapshots shared by HTTP and streaming."""
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Protocol
 from uuid import UUID
 
+from mic3_api.application.runs.errors import RunAccessDenied, RunNotFound
+from mic3_api.application.runs.status import RunStatus
 from mic3_api.application.users import CurrentUser
+from mic3_api.application.users.roles import ADMIN_ROLE
 
-RunStatus = Literal["queued", "running", "succeeded", "failed"]
-
-
-class RunNotFound(Exception):
-    pass
-
-
-class RunAccessDenied(Exception):
-    pass
+__all__ = ["GetRun", "ListOwnRuns", "RunAccessDenied", "RunDetail", "RunFile", "RunNotFound",
+           "RunQueries", "RunStatus", "RunSummary"]
 
 
 @dataclass(frozen=True)
@@ -48,17 +44,23 @@ class RunQueries(Protocol):
 
 
 class GetRun:
-    def execute(self, user: CurrentUser, store: RunQueries, run_id: UUID) -> RunDetail:
-        run = store.find(run_id)
+    def __init__(self, store: RunQueries) -> None:
+        self._store = store
+
+    def execute(self, user: CurrentUser, run_id: UUID) -> RunDetail:
+        run = self._store.find(run_id)
         if run is None:
             raise RunNotFound("Run does not exist.")
-        if run.requested_by != user.id and "admin" not in user.roles:
+        if run.requested_by != user.id and ADMIN_ROLE not in user.roles:
             raise RunAccessDenied("You cannot access this run.")
         return run
 
 
 class ListOwnRuns:
-    def execute(self, user: CurrentUser, store: RunQueries, *, limit: int, offset: int) -> list[RunSummary]:
+    def __init__(self, store: RunQueries) -> None:
+        self._store = store
+
+    def execute(self, user: CurrentUser, *, limit: int, offset: int) -> list[RunSummary]:
         if not 1 <= limit <= 100 or offset < 0:
             raise ValueError("Invalid pagination.")
-        return store.list_owned(user.id, limit, offset)
+        return self._store.list_owned(user.id, limit, offset)

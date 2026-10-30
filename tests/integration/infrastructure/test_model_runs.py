@@ -12,11 +12,13 @@ from sqlalchemy import delete, event, func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import ModelError, register_release
+from mic3_api.application.errors import ApplicationError
+from mic3_api.application.models.catalog import ModelError, RegisterRelease
 from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.infrastructure.persistence import Model, ModelReleaseRow, OutboxEvent, Run, User
 from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
+from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 from mic3_api.main import create_app
 from tests.catalog_data import CONFIG, PARAMETERS, MODE
 
@@ -26,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def register(engine, config=None):
     with Session(engine) as session:
-        return register_release(config or CONFIG, SqlAlchemyModelCatalog(session))
+        return RegisterRelease(SqlAlchemyModelCatalog(session)).execute(config or CONFIG)
 
 
 def submit(session, release_id, requested_by=None, parameters=None):
@@ -52,7 +54,7 @@ def test_concurrent_registration_and_editable_catalog(migrated_engine):
         assert len(catalog.list_releases()) == 1
         new_run = submit(session, changed.id)
         assert old_run.fingerprint != new_run.fingerprint
-        assert SqlAlchemyRunSubmissions(session).show(old_run.id)["fingerprint"] == old_run.fingerprint
+        assert SqlAlchemyRunInspection(session).show(old_run.id)["fingerprint"] == old_run.fingerprint
     config["image_digest"] = "another/image@sha256:" + "b" * 64
     assert register(migrated_engine, config).id != changed.id
 
@@ -70,7 +72,7 @@ def test_submission_and_fresh_session_retrieval(migrated_engine):
         assert not session.in_transaction()
     with Session(migrated_engine) as session:
         for run in (anonymous, attributed):
-            saved = SqlAlchemyRunSubmissions(session).show(run.id)
+            saved = SqlAlchemyRunInspection(session).show(run.id)
             assert saved["requested_by"] == run.requested_by
             assert saved["parameters"] == PARAMETERS
             assert saved["model_release_id"] == release.id
@@ -112,7 +114,7 @@ def test_invalid_submissions_leave_no_records(migrated_engine):
             (release.id, uuid4(), PARAMETERS),
             (release.id, None, {}), (release.id, None, {"mode": "steel"}),
         ]:
-            with pytest.raises(ModelError):
+            with pytest.raises(ApplicationError):
                 submit(session, release_id, user_id, parameters)
             assert not session.in_transaction()
         assert session.scalar(select(func.count()).select_from(Run)) == 0

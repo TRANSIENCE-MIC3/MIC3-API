@@ -1,27 +1,38 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import asyncio
+from typing import Protocol
 
 from fastapi import FastAPI
 
 from mic3_api import __version__
-from mic3_api.application.authentication import AccessTokenValidator
+from mic3_api.api.errors import register_error_handlers
 from mic3_api.api.router import api_router
+from mic3_api.application.authentication import AccessTokenValidator
+from mic3_api.application.runs.feed import RunFeed
 from mic3_api.core.config import Settings
 from mic3_api.infrastructure.authentication import OidcAccessTokenValidator
 from mic3_api.infrastructure.database import Database, DatabaseGateway
-from mic3_api.application.runs.feed import RunFeed
 from mic3_api.infrastructure.persistence.run_feed import SqlAlchemyRunFeed
 from mic3_api.infrastructure.run_notifications import RunNotifications
+
+
+class BackgroundService(Protocol):
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+
+
+NotificationsFactory = Callable[[Settings, RunFeed], BackgroundService]
 
 
 def create_app(
     settings: Settings | None = None,
     database: DatabaseGateway | None = None,
     token_validator: AccessTokenValidator | None = None,
+    notifications_factory: NotificationsFactory = RunNotifications,
 ) -> FastAPI:
-    """Create and configure the FastAPI application."""
+    """Create and configure the FastAPI application; arguments replace real adapters."""
     app_settings = settings or Settings()
     app_database = database or Database(app_settings.database_url)
     app_token_validator = token_validator or OidcAccessTokenValidator(
@@ -36,7 +47,7 @@ def create_app(
                        per_user=app_settings.sse_max_streams_per_user,
                        total=app_settings.sse_max_streams,
                        pending=app_settings.sse_pending_runs)
-    notifications = RunNotifications(app_settings, run_feed)
+    notifications = notifications_factory(app_settings, run_feed)
     snapshot_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="run-feed-snapshot")
 
     @asynccontextmanager
@@ -61,5 +72,6 @@ def create_app(
     app.state.run_feed = run_feed
     app.state.run_feed_snapshots = snapshot_executor
     app.state.token_validator = app_token_validator
+    register_error_handlers(app)
     app.include_router(api_router)
     return app

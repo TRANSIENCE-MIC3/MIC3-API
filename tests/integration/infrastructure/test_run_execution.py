@@ -7,7 +7,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 import pytest
 
-from mic3_api.application.models.catalog import register_release
+from mic3_api.application.models.catalog import RegisterRelease
 from mic3_api.application.runs.acceptance import AcceptRun
 from mic3_api.application.runs.execution import Artifact
 from mic3_api.application.runs.submission import SubmitRun
@@ -15,14 +15,19 @@ from mic3_api.infrastructure.persistence.execution import Run, OutboxEvent, RunA
 from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
 from mic3_api.infrastructure.persistence.run_acceptance import SqlAlchemyRunAcceptance
+from mic3_api.application.runs.execution import ReconcileExecutions
 from mic3_api.infrastructure.persistence.run_execution import SqlAlchemyExecutions
 from tests.catalog_data import CONFIG, PARAMETERS
+
+
+def claim(store):
+    return ReconcileExecutions(store, jobs=None, outputs=None, namespace="test", capacity=1).claim_next()
 
 
 def accepted(engine):
     with Session(engine) as s:
         catalog = SqlAlchemyModelCatalog(s)
-        release = register_release(CONFIG, catalog)
+        release = RegisterRelease(catalog).execute(CONFIG)
         run = SubmitRun(catalog, SqlAlchemyRunSubmissions(s)).execute(release.id, PARAMETERS)
         AcceptRun(SqlAlchemyRunAcceptance(s)).execute(run.id)
         return run.id
@@ -32,7 +37,7 @@ def test_claim_capacity_locks_and_terminal_idempotency(migrated_engine):
     first, second = accepted(migrated_engine), accepted(migrated_engine)
     store = SqlAlchemyExecutions(migrated_engine)
     with ThreadPoolExecutor(2) as pool:
-        claimed = list(pool.map(lambda _: store.claim_next("test", 1), range(2)))
+        claimed = list(pool.map(lambda _: claim(store), range(2)))
     assert sorted(str(x) for x in claimed) == sorted([str(first), str(None)])
     with store.locked(first) as record:
         with store.locked(first) as conflict:
@@ -42,7 +47,7 @@ def test_claim_capacity_locks_and_terminal_idempotency(migrated_engine):
         record.save_job_uid("uid-one")
         record.finish(None, (Artifact("bucket", "key", 10),))
         record.finish(None, (Artifact("bucket", "key", 10),))
-    assert store.claim_next("test", 1) == second
+    assert claim(store) == second
     with Session(migrated_engine) as s:
         assert s.get(Run, first).job_uid == "uid-one"
         assert s.get(Run, first).finished_at
@@ -53,7 +58,7 @@ def test_claim_capacity_locks_and_terminal_idempotency(migrated_engine):
 def test_terminal_commit_rolls_back_artifacts_and_event(migrated_engine):
     run_id = accepted(migrated_engine)
     store = SqlAlchemyExecutions(migrated_engine)
-    store.claim_next("test", 1)
+    claim(store)
     with store.locked(run_id) as record:
         def fail(_):
             raise OperationalError("test", {}, Exception("commit failure"))
@@ -73,7 +78,7 @@ def test_stale_claim_fails_without_dispatch(migrated_engine):
     run_id = accepted(migrated_engine)
     with Session(migrated_engine) as s, s.begin():
         s.get(Run, run_id).fingerprint = "a" * 64
-    assert SqlAlchemyExecutions(migrated_engine).claim_next("test", 1) is None
+    assert claim(SqlAlchemyExecutions(migrated_engine)) is None
     with Session(migrated_engine) as s:
         row = s.get(Run, run_id)
         assert row.failure_code == "execution_definition_changed"

@@ -9,19 +9,20 @@ from sqlalchemy import MetaData, Table, create_engine, event, inspect, select, u
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import ModelError, register_release
+from mic3_api.application.models.catalog import ModelError, RegisterRelease
 from mic3_api.application.runs.acceptance import AcceptRun
 from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.infrastructure.persistence.execution import Run
 from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.run_acceptance import SqlAlchemyRunAcceptance
 from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
+from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 from tests.catalog_data import CONFIG, MODE, PARAMETERS
 
 
 def register(engine, config=None):
     with Session(engine) as session:
-        return register_release(config or CONFIG, SqlAlchemyModelCatalog(session))
+        return RegisterRelease(SqlAlchemyModelCatalog(session)).execute(config or CONFIG)
 
 
 def submit(engine, config=None):
@@ -41,7 +42,7 @@ def accept(engine, run_id):
 
 def show(engine, run_id):
     with Session(engine) as session:
-        return SqlAlchemyRunSubmissions(session).show(run_id)
+        return SqlAlchemyRunInspection(session).show(run_id)
 
 
 def test_concurrent_acceptance_returns_one_timestamp_and_keeps_queued(migrated_engine):

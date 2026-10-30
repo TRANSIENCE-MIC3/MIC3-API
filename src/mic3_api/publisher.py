@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import signal
 from threading import Event
 
 from confluent_kafka import KafkaException
@@ -14,6 +13,7 @@ from mic3_api.core.publisher_config import PublisherSettings
 from mic3_api.infrastructure.database import Database
 from mic3_api.infrastructure.kafka_publication import KafkaEventPublisher
 from mic3_api.infrastructure.persistence.outbox import SqlAlchemyOutbox
+from mic3_api.process import stop_on_signals
 
 LOG = logging.getLogger(__name__)
 
@@ -48,7 +48,6 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     database = publisher = None
     stop = Event()
-    previous = {}
     try:
         settings = PublisherSettings()
         database = Database(settings.database_url)
@@ -58,15 +57,12 @@ def main(argv: list[str] | None = None) -> int:
             settings.kafka_events_topic,
             security=settings,
         )
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, lambda *_: stop.set())
-        return run(database, publisher, settings, stop, once=args.once)
+        with stop_on_signals(stop):
+            return run(database, publisher, settings, stop, once=args.once)
     except (ValidationError, KafkaException, SQLAlchemyError):
         LOG.error("Publisher configuration or initialization failed.")
         return 1
     finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
         if publisher is not None:
             publisher.close()
         if database is not None:

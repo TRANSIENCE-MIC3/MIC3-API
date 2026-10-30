@@ -8,16 +8,19 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import ModelError, register_release
+from mic3_api.application.models.catalog import ModelError, RegisterRelease
+from mic3_api.application.runs.fingerprint import matches_fingerprint
+from mic3_api.application.runs.status import RunStatus
 from mic3_api.application.runs.submission import SubmitRun
-from mic3_api.application.runs.fingerprint import fingerprint
 from mic3_api.infrastructure.model_jobs import model_job_values
 from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
+from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
 
 
 def add_run_commands(commands) -> None:
-    register = commands.add_parser("register-model-release", help="Register or update a trusted model/image catalog entry")
+    register = commands.add_parser("register-model-release",
+                                   help="Register or update a trusted model/image catalog entry")
     register.add_argument("--config", type=Path, required=True)
     submit = commands.add_parser("submit-run", help="Persist queued work (no execution yet)")
     submit.add_argument("--release-id", type=UUID, required=True)
@@ -41,21 +44,21 @@ def read_json(path: Path) -> object:
 
 def execute_run_command(args: argparse.Namespace, session: Session) -> dict:
     catalog = SqlAlchemyModelCatalog(session)
-    submissions = SqlAlchemyRunSubmissions(session)
+    inspection = SqlAlchemyRunInspection(session)
     if args.command == "register-model-release":
-        release = register_release(read_json(args.config), catalog)
+        release = RegisterRelease(catalog).execute(read_json(args.config))
         return {"id": release.id, "model_id": release.definition.model_id,
                 "image_digest": release.definition.image_digest}
     if args.command == "submit-run":
-        return asdict(SubmitRun(catalog, submissions).execute(
+        return asdict(SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(
             args.release_id, read_json(args.parameters), args.requested_by,
         ))
     if args.command == "model-job-values":
-        run = submissions.show(args.run_id)
+        run = inspection.show(args.run_id)
         release = catalog.get_release(run["model_release_id"])
-        if run["status"] != "queued":
+        if run["status"] != RunStatus.QUEUED:
             raise ModelError("Only queued runs can be exported; retry by submitting a new run.")
-        if fingerprint(release.definition, run["parameters"]) != run["fingerprint"]:
+        if not matches_fingerprint(release.definition, run["parameters"], run["fingerprint"]):
             raise ModelError("Catalog execution has changed; submit a new run before exporting Job values.")
         return model_job_values(release.definition, run["parameters"], args.run_id)
-    return submissions.show(args.run_id)
+    return inspection.show(args.run_id)

@@ -96,7 +96,7 @@ def test_provisions_one_member_and_returns_sorted_roles() -> None:
     repository = FakeRepository()
     unit_of_work = FakeUnitOfWork(repository)
 
-    current_user = ResolveCurrentUser().execute(IDENTITY, unit_of_work)
+    current_user = ResolveCurrentUser(unit_of_work).execute(IDENTITY)
 
     assert current_user.id == USER_ID
     assert current_user.email == "member@example.org"
@@ -123,7 +123,7 @@ def test_updates_changed_claims_and_retains_missing_claims() -> None:
         display_name=None,
     )
 
-    current_user = ResolveCurrentUser().execute(identity, unit_of_work)
+    current_user = ResolveCurrentUser(unit_of_work).execute(identity)
 
     assert current_user.email == "new@example.org"
     assert current_user.display_name == "Last Known Name"
@@ -141,7 +141,7 @@ def test_does_not_write_when_profile_claims_are_unchanged() -> None:
     )
     repository = FakeRepository(account)
 
-    ResolveCurrentUser().execute(IDENTITY, FakeUnitOfWork(repository))
+    ResolveCurrentUser(FakeUnitOfWork(repository)).execute(IDENTITY)
 
     assert repository.update_calls == 0
 
@@ -158,7 +158,7 @@ def test_rejects_inactive_account_without_updating_it() -> None:
     unit_of_work = FakeUnitOfWork(repository)
 
     with pytest.raises(InactiveUserError):
-        ResolveCurrentUser().execute(IDENTITY, unit_of_work)
+        ResolveCurrentUser(unit_of_work).execute(IDENTITY)
 
     assert repository.update_calls == 0
     assert unit_of_work.rollbacks == 1
@@ -170,7 +170,7 @@ def test_missing_member_role_becomes_configuration_error() -> None:
     unit_of_work = FakeUnitOfWork(repository)
 
     with pytest.raises(UserProvisioningConfigurationError):
-        ResolveCurrentUser().execute(IDENTITY, unit_of_work)
+        ResolveCurrentUser(unit_of_work).execute(IDENTITY)
 
     assert unit_of_work.rollbacks == 1
 
@@ -207,7 +207,7 @@ def test_reloads_the_winning_account_after_a_provisioning_race() -> None:
     repository = RacingRepository()
     unit_of_work = FakeUnitOfWork(repository)
 
-    current_user = ResolveCurrentUser().execute(IDENTITY, unit_of_work)
+    current_user = ResolveCurrentUser(unit_of_work).execute(IDENTITY)
 
     assert current_user.id == winning_account.id
     assert unit_of_work.transactions == 2

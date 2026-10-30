@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mic3_api.infrastructure.persistence.execution import Run, RunArtifact, OutboxEvent
-from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
+from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('deployment_check', ROOT/'scripts/deployment_check.py')
@@ -29,7 +29,7 @@ def test_submit_uses_atomic_application_path_and_distinct_runs(migrated_engine, 
         first = check.register_and_submit(session, 'example.test/api@sha256:'+'a'*64)
         second = check.register_and_submit(session, 'example.test/api@sha256:'+'a'*64)
         assert first != second
-        result = SqlAlchemyRunSubmissions(session).show(first)
+        result = SqlAlchemyRunInspection(session).show(first)
         assert result['status'] == 'queued' and result['requested_by'] is None
         assert [event['event_type'] for event in result['events']] == ['run.requested']
         assert str(first) in capsys.readouterr().out
@@ -51,7 +51,7 @@ def test_terminal_verification(migrated_engine, defect):
                 event.published_at = datetime.now(timezone.utc)
             session.add(OutboxEvent(run_id=run_id, event_type='run.succeeded',
                 published_at=None if defect == 'unpublished' else datetime.now(timezone.utc)))
-        result = SqlAlchemyRunSubmissions(session).show(run_id)
+        result = SqlAlchemyRunInspection(session).show(run_id)
         storage = Storage(b'wrong' if defect == 'bytes' else check.EXPECTED)
         if defect in ('failed', 'missing', 'bytes', 'acceptance'):
             with pytest.raises(RuntimeError): check.verify_result(result, storage, 'bucket')
@@ -62,7 +62,7 @@ def test_terminal_verification(migrated_engine, defect):
 def test_timeout_preserves_queued_run(migrated_engine):
     with Session(migrated_engine) as session:
         run_id = check.register_and_submit(session, 'example.test/api@sha256:'+'a'*64)
-        store = SqlAlchemyRunSubmissions(session)
+        store = SqlAlchemyRunInspection(session)
         times = iter([0, 0, 1, 2])
         with pytest.raises(TimeoutError):
             check.wait_for_run(lambda: store.show(run_id), Storage(), 'bucket', timeout=1,

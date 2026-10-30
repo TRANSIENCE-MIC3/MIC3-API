@@ -1,25 +1,27 @@
 """Personal SSE transport. Authentication/session lifetimes are shorter than streams."""
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import asdict
+from concurrent.futures import Executor
 import json
 import math
 import random
 import time
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from starlette.responses import StreamingResponse
 from starlette.requests import ClientDisconnect
 from starlette.types import Message, Receive, Scope, Send
-from sqlalchemy.exc import SQLAlchemyError
 
-from mic3_api.api.dependencies.authentication import get_current_user, get_validated_identity
+from mic3_api.api.dependencies.authentication import get_validated_identity, resolve_current_user_in_new_session
+from mic3_api.api.dependencies.database import get_database
+from mic3_api.api.dependencies.use_cases import get_run_feed, get_snapshot_executor
+from mic3_api.api.schemas.runs import RunDetailResponse
 from mic3_api.application.authentication import ValidatedIdentity
 from mic3_api.application.runs.feed import FeedLimitExceeded, FeedUnavailable, RunFeed, Subscription
 from mic3_api.application.runs.queries import RunDetail
-from mic3_api.api.routes.runs import RunDetailResponse
+from mic3_api.infrastructure.database import DatabaseGateway
 
 router = APIRouter(tags=["runs"])
 HEARTBEAT_SECONDS = 15
@@ -34,7 +36,7 @@ def frame(event: str, data: Any) -> str:
 
 
 def run_data(run: RunDetail) -> dict:
-    return RunDetailResponse(**asdict(run)).model_dump(mode="json")
+    return RunDetailResponse.from_detail(run).model_dump(mode="json")
 
 
 class RunEventResponse(StreamingResponse):
@@ -65,21 +67,16 @@ class RunEventResponse(StreamingResponse):
     429: {"description": "This API process has reached a stream limit."},
     503: {"description": "The database or notification listener is unavailable."},
 })
-async def run_events(request: Request, identity: Annotated[ValidatedIdentity, Depends(get_validated_identity)]):
+async def run_events(identity: Annotated[ValidatedIdentity, Depends(get_validated_identity)],
+                     feed: Annotated[RunFeed, Depends(get_run_feed)],
+                     snapshots: Annotated[Executor, Depends(get_snapshot_executor)],
+                     database: Annotated[DatabaseGateway, Depends(get_database)]):
     expires_at = identity.expires_at
     if expires_at is None or not math.isfinite(expires_at) or expires_at <= time.time():
         raise HTTPException(401, "An unexpired bearer token is required.", headers={"WWW-Authenticate": "Bearer"})
-    feed: RunFeed = request.app.state.run_feed
     loop = asyncio.get_running_loop()
-
-    def resolve_user():
-        try:
-            with request.app.state.database.open_session() as session:
-                return get_current_user(identity, session)
-        except SQLAlchemyError as exc:
-            raise HTTPException(503, "Database access is unavailable.") from exc
-
-    user = await asyncio.to_thread(resolve_user)
+    # Not the get_current_user dependency: its request session would stay open for the whole stream.
+    user = await asyncio.to_thread(resolve_current_user_in_new_session, identity, database)
     try:
         sub = feed.subscribe(user.id, loop)
     except FeedLimitExceeded as exc:
@@ -89,7 +86,7 @@ async def run_events(request: Request, identity: Annotated[ValidatedIdentity, De
     try:
         # Snapshots run one at a time; a small dedicated pool keeps waiting ones from
         # tying up the default executor that the access checks below also use.
-        snapshot = await loop.run_in_executor(request.app.state.run_feed_snapshots, feed.snapshot, sub)
+        snapshot = await loop.run_in_executor(snapshots, feed.snapshot, sub)
     except BaseException as exc:
         feed.unsubscribe(sub)
         if not isinstance(exc, Exception):

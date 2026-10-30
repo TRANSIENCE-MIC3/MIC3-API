@@ -1,21 +1,16 @@
 """Short, consistent database reads with no live ORM objects escaping."""
-from dataclasses import fields
-from pathlib import PurePosixPath
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from mic3_api.application.runs.queries import RunDetail, RunFile, RunSummary
+from mic3_api.application.runs.queries import RunDetail, RunSummary
 from mic3_api.infrastructure.persistence.execution import Run, RunArtifact
-
-
-def summary_values(run: Run) -> dict:
-    return {field.name: getattr(run, field.name) for field in fields(RunSummary)}
+from mic3_api.infrastructure.persistence.mappers import run_detail, run_summary
 
 
 class SqlAlchemyRunQueries:
-    def __init__(self, session: Session, *, statement_timeout_ms: int | None = None):
+    def __init__(self, session: Session, *, statement_timeout_ms: int | None = None) -> None:
         self._session = session
         self._statement_timeout_ms = statement_timeout_ms
 
@@ -32,14 +27,11 @@ class SqlAlchemyRunQueries:
             ).all()
             if not rows:
                 return None
-            return RunDetail(**summary_values(rows[0][0]), artifacts=tuple(
-                RunFile(PurePosixPath(artifact.object_key).name, artifact.size_bytes)
-                for _, artifact in rows if artifact is not None
-            ))
+            return run_detail(rows[0][0], (artifact for _, artifact in rows if artifact is not None))
 
     def list_owned(self, user_id: UUID, limit: int, offset: int) -> list[RunSummary]:
         with self._session.begin():
-            return [RunSummary(**summary_values(run)) for run in self._session.scalars(
+            return [run_summary(run) for run in self._session.scalars(
                 select(Run).where(Run.requested_by == user_id)
                 .order_by(Run.created_at.desc(), Run.id.desc()).limit(limit).offset(offset)
                 .execution_options(populate_existing=True)

@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from mic3_api.application.runs.acceptance import AcceptRun, RunNotFound
+from mic3_api.application.runs.acceptance import AcceptRun
+from mic3_api.application.runs.errors import RunNotFound
 
 
 @dataclass(frozen=True)

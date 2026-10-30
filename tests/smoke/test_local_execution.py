@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from botocore.exceptions import ClientError
 import pytest
 
+from mic3_api.application.runs.execution import ReconcileExecutions
 from mic3_api.core.execution_config import ExecutionSettings
 from mic3_api.infrastructure.database import Database
 from mic3_api.infrastructure.persistence.execution import Run
@@ -90,7 +91,7 @@ def test_complete_local_execution_and_recovery():
                 if s.get(Run,UUID(intent_id)).accepted_at:
                     break
         store = SqlAlchemyExecutions(database.engine)
-        assert store.claim_next(settings.execution_namespace,1) == UUID(intent_id)
+        assert ReconcileExecutions(store, None, None, settings.execution_namespace, 1).claim_next() == UUID(intent_id)
         start('mic3_api.publisher')
         worker = start('mic3_api.worker','--execute')
         running = wait(intent_id, lambda row: row.job_uid is not None)

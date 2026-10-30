@@ -7,25 +7,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mic3_api.application.models.catalog import ReleaseDefinition
-from mic3_api.application.models.execution import ExecutionDefinition
-from mic3_api.application.runs.acceptance import RunForAcceptance, RunNotFound
-from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
+from mic3_api.application.runs.acceptance import RunForAcceptance
+from mic3_api.application.runs.errors import RunNotFound
+from mic3_api.application.runs.status import RunStatus
+from mic3_api.infrastructure.persistence.execution import ModelReleaseRow, Run
+from mic3_api.infrastructure.persistence.mappers import load_release_definition
 from mic3_api.infrastructure.persistence.run_outcomes import finish_row
 
 
 class SqlAlchemyAcceptanceTransaction:
     def __init__(self, session: Session, row: Run, release: ModelReleaseRow) -> None:
-        self._session, self._row, self._release = session, row, release
+        self._session = session
+        self._row = row
+        self._release = release
         self.run = RunForAcceptance(row.id, row.parameters, row.fingerprint, row.status,
                                     row.accepted_at, row.failure_code)
 
     def load_release(self) -> ReleaseDefinition:
-        model = self._session.get(Model, self._release.model_id)
-        return ReleaseDefinition(model.id, model.display_name, self._release.image_digest,
-                                 ExecutionDefinition.from_dict(self._release.execution_definition))
+        return load_release_definition(self._session, self._release)
 
     def save_outcome(self, run: RunForAcceptance) -> None:
-        if run.status == "failed":
+        if run.status == RunStatus.FAILED:
             finish_row(self._session, self._row, run.failure_code)
         else:
             self._row.status = run.status

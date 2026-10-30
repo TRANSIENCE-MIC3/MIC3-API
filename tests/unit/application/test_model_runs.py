@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from mic3_api.application.models.catalog import ModelError, ModelRelease, ReleaseDefinition, register_release
+from mic3_api.application.models.catalog import ModelError, ModelRelease, ReleaseDefinition, RegisterRelease
 from mic3_api.application.models.execution import ExecutionDefinition, Invocation
 from mic3_api.application.runs.fingerprint import fingerprint
 from mic3_api.application.runs.submission import SubmitRun
@@ -39,7 +39,7 @@ def test_modes_resolve_distinct_invocations_and_match_metadata(release):
 @pytest.mark.parametrize("mode", list(CONFIG["execution_definition"]["modes"]))
 def test_registered_catalog_modes_are_usable(mode):
     catalog = Mock()
-    register_release(CONFIG, catalog)
+    RegisterRelease(catalog).execute(CONFIG)
     definition = catalog.register.call_args.args[0]
     effective = definition.execution_definition.prepare({"mode": mode})
     assert effective == {"mode": mode}
@@ -91,7 +91,7 @@ def test_submission_has_no_model_specific_dispatch(release):
 def test_invalid_registration_rejected(change):
     catalog = Mock()
     with pytest.raises(ModelError):
-        register_release(CONFIG | change, catalog)
+        RegisterRelease(catalog).execute(CONFIG | change)
     catalog.register.assert_not_called()
 
 

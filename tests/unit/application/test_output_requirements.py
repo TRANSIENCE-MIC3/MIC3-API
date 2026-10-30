@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from mic3_api.application.models.catalog import ModelError, register_release
+from mic3_api.application.models.catalog import ModelError, RegisterRelease
 from mic3_api.application.models.catalog_changes import ensure_active_modes_unchanged
 from mic3_api.application.models.execution import ExecutionDefinition
 from mic3_api.application.models.outputs import OutputRequirements
@@ -16,7 +16,7 @@ from unittest.mock import Mock
 
 def definition(config):
     catalog = Mock()
-    register_release(config, catalog)
+    RegisterRelease(catalog).execute(config)
     return catalog.register.call_args.args[0]
 
 

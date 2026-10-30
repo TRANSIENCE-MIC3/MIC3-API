@@ -6,14 +6,12 @@ from mic3_api.application.users.ports import (
     InitialRoleNotFoundError,
     UserAccountUnitOfWork,
 )
+from mic3_api.application.users.roles import MEMBER_ROLE
 from mic3_api.application.users.user_account import (
     CurrentUser,
     UserAccount,
     UserProfileUpdates,
 )
-
-
-MEMBER_ROLE = "member"
 
 
 class InactiveUserError(Exception):
@@ -31,16 +29,15 @@ class IdentityProvisioningError(Exception):
 class ResolveCurrentUser:
     """Resolve an exact identity and provision a non-elevated user if needed."""
 
-    def execute(
-        self,
-        identity: ValidatedIdentity,
-        unit_of_work: UserAccountUnitOfWork,
-    ) -> CurrentUser:
+    def __init__(self, unit_of_work: UserAccountUnitOfWork) -> None:
+        self._unit_of_work = unit_of_work
+
+    def execute(self, identity: ValidatedIdentity) -> CurrentUser:
         """Return the active local user for a trusted external identity."""
         try:
-            return self._resolve_once(identity, unit_of_work)
+            return self._resolve_once(identity, self._unit_of_work)
         except IdentityAlreadyAssignedError:
-            return self._resolve_after_concurrent_assignment(identity, unit_of_work)
+            return self._resolve_after_concurrent_assignment(identity, self._unit_of_work)
         except InitialRoleNotFoundError as exc:
             raise UserProvisioningConfigurationError from exc
 

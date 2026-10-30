@@ -22,6 +22,7 @@ from mic3_api.application.users import (
     ResolveCurrentUser,
     UserProvisioningConfigurationError,
 )
+from mic3_api.infrastructure.database import DatabaseGateway
 from mic3_api.infrastructure.persistence.unit_of_work import (
     SqlAlchemyUserAccountUnitOfWork,
 )
@@ -33,7 +34,6 @@ bearer_scheme = HTTPBearer(
     bearerFormat="JWT",
     description="OIDC access token issued for the MIC3 API audience.",
 )
-current_user_resolver = ResolveCurrentUser()
 
 
 def get_token_validator(request: Request) -> AccessTokenValidator:
@@ -64,14 +64,33 @@ def get_validated_identity(
         ) from exc
 
 
+def get_user_resolver(session: Annotated[Session, Depends(get_session)]) -> ResolveCurrentUser:
+    return ResolveCurrentUser(SqlAlchemyUserAccountUnitOfWork(session))
+
+
 def get_current_user(
     identity: Annotated[ValidatedIdentity, Depends(get_validated_identity)],
-    session: Annotated[Session, Depends(get_session)],
+    resolver: Annotated[ResolveCurrentUser, Depends(get_user_resolver)],
 ) -> CurrentUser:
     """Resolve a validated identity to one active, persisted MIC3 user."""
-    unit_of_work = SqlAlchemyUserAccountUnitOfWork(session)
+    return resolve_current_user(identity, resolver)
+
+
+def resolve_current_user_in_new_session(identity: ValidatedIdentity, database: DatabaseGateway) -> CurrentUser:
+    """Resolve the user with a session that closes before a long-lived stream starts."""
     try:
-        return current_user_resolver.execute(identity, unit_of_work)
+        with database.open_session() as session:
+            return resolve_current_user(identity, get_user_resolver(session))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database access is unavailable.",
+        ) from exc
+
+
+def resolve_current_user(identity: ValidatedIdentity, resolver: ResolveCurrentUser) -> CurrentUser:
+    try:
+        return resolver.execute(identity)
     except InactiveUserError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

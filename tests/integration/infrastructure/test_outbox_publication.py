@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import register_release
+from mic3_api.application.models.catalog import RegisterRelease
 from mic3_api.application.runs.publication import PublicationError, PublishOutbox
 from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.infrastructure.kafka_publication import KafkaEventPublisher
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def submit(engine):
     with Session(engine) as session:
         catalog = SqlAlchemyModelCatalog(session)
-        release = register_release(CONFIG, catalog)
+        release = RegisterRelease(catalog).execute(CONFIG)
         return SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(release.id, PARAMETERS)
 
 

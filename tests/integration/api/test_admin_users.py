@@ -15,7 +15,7 @@ from tests.integration.api.test_current_user import StubTokenValidator
 
 def grant(engine, user_id):
     with Session(engine) as session:
-        return GrantAdmin().execute(user_id, Uow(session))
+        return GrantAdmin(Uow(session)).execute(user_id)
 
 
 def test_directory_and_grant(migrated_engine, postgres_test_settings):
@@ -105,11 +105,11 @@ def test_grant_write_failure_rolls_back_and_session_is_reusable(migrated_engine,
         with monkeypatch.context() as patch:
             patch.setattr(SqlAlchemyUserAdministrationRepository, "add_role", fail_after_write)
             with pytest.raises(RuntimeError):
-                GrantAdmin().execute(user_id, Uow(session))
+                GrantAdmin(Uow(session)).execute(user_id)
         assert not session.in_transaction()
         with session.begin():
             assert list(session.scalars(select(UserRole))) == []
-        assert GrantAdmin().execute(user_id, Uow(session)) is True
+        assert GrantAdmin(Uow(session)).execute(user_id) is True
 
 
 def test_cli_against_database_without_oidc(migrated_engine, monkeypatch, capsys):

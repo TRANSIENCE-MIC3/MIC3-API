@@ -15,7 +15,7 @@ from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import register_release
+from mic3_api.application.models.catalog import RegisterRelease
 from mic3_api.application.runs.publication import PublishOutbox
 from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.core.worker_config import WorkerSettings
@@ -49,7 +49,7 @@ def flow(migrated_engine, kafka_broker):
 def submit(flow):
     with Session(flow.engine) as session:
         catalog = SqlAlchemyModelCatalog(session)
-        release = register_release(CONFIG, catalog)
+        release = RegisterRelease(catalog).execute(CONFIG)
         return SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(release.id, PARAMETERS)
 
 
