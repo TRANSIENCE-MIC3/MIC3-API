@@ -70,6 +70,7 @@ def test_owned_run_notification_carries_owner(migrated_engine, postgres_test_set
 
 
 def test_trigger_security_and_downgrade(migrated_engine, postgres_test_settings, alembic_config):
+    command.upgrade(alembic_config, "head")  # alembic_config starts from an empty schema.
     release = register(migrated_engine)
     with Session(migrated_engine) as session:
         run = submit(session, release.id)

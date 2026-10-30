@@ -30,9 +30,10 @@ def create_app(
     settings: Settings | None = None,
     database: DatabaseGateway | None = None,
     token_validator: AccessTokenValidator | None = None,
-    notifications_factory: NotificationsFactory = RunNotifications,
+    notifications_factory: NotificationsFactory | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application; arguments replace real adapters."""
+    notifications_factory = notifications_factory or RunNotifications
     app_settings = settings or Settings()
     app_database = database or Database(app_settings.database_url)
     app_token_validator = token_validator or OidcAccessTokenValidator(

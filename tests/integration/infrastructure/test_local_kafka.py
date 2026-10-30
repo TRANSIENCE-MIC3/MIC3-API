@@ -3,6 +3,10 @@
 import json
 from uuid import uuid4
 
+import pytest
+
+pytestmark = pytest.mark.environment
+
 
 def test_local_kafka_topics_replay_and_persistent_recreation(kafka_broker):
     run, kafka = kafka_broker.run, kafka_broker.kafka

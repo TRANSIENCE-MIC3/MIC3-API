@@ -19,6 +19,8 @@ from tests.integration.api.test_current_user import IDENTITY, StubTokenValidator
 from tests.integration.api.test_admin_users import grant
 from tests.integration.infrastructure.test_model_runs import register, submit
 
+pytestmark = pytest.mark.live_notifications
+
 
 def wait_until(check, timeout=5):
     deadline = time.monotonic() + timeout
