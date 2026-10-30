@@ -1,44 +1,53 @@
 """Personal SSE transport. Authentication/session lifetimes are shorter than streams."""
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 import json
 import math
+import random
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from starlette.responses import StreamingResponse
 from starlette.requests import ClientDisconnect
+from starlette.types import Message, Receive, Scope, Send
 from sqlalchemy.exc import SQLAlchemyError
 
 from mic3_api.api.dependencies.authentication import get_current_user, get_validated_identity
 from mic3_api.application.authentication import ValidatedIdentity
-from mic3_api.application.runs.feed import FeedLimitExceeded, FeedUnavailable
+from mic3_api.application.runs.feed import FeedLimitExceeded, FeedUnavailable, RunFeed, Subscription
+from mic3_api.application.runs.queries import RunDetail
 from mic3_api.api.routes.runs import RunDetailResponse
 
 router = APIRouter(tags=["runs"])
 HEARTBEAT_SECONDS = 15
 SEND_TIMEOUT_SECONDS = 30
+# Clients reconnect together after a listener loss; spread them out.
+RETRY_MIN_MS, RETRY_MAX_MS = 2_000, 8_000
 
 
-def frame(event, data):
-    return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), separators=(',', ':'), allow_nan=False)}\n\n"
+def frame(event: str, data: Any) -> str:
+    payload = json.dumps(jsonable_encoder(data), separators=(",", ":"), allow_nan=False)
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
-def run_data(run):
+def run_data(run: RunDetail) -> dict:
     return RunDetailResponse(**asdict(run)).model_dump(mode="json")
 
 
 class RunEventResponse(StreamingResponse):
-    def __init__(self, content, feed, subscription):
+    def __init__(self, content: AsyncIterator[str], feed: RunFeed, subscription: Subscription):
         super().__init__(content, media_type="text/event-stream", headers={
-            "Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no",
+            # no-transform stops gzip layers (e.g. the Next.js proxy) from buffering frames.
+            "Cache-Control": "no-cache, no-store, no-transform", "X-Accel-Buffering": "no",
         })
-        self.feed, self.subscription = feed, subscription
+        self.feed = feed
+        self.subscription = subscription
 
-    async def __call__(self, scope, receive, send):
-        async def bounded_send(message):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def bounded_send(message: Message) -> None:
             await asyncio.wait_for(send(message), SEND_TIMEOUT_SECONDS)
         try:
             await super().__call__(scope, receive, bounded_send)
@@ -57,9 +66,11 @@ class RunEventResponse(StreamingResponse):
     503: {"description": "The database or notification listener is unavailable."},
 })
 async def run_events(request: Request, identity: Annotated[ValidatedIdentity, Depends(get_validated_identity)]):
-    if identity.expires_at is None or not math.isfinite(identity.expires_at) or identity.expires_at <= time.time():
+    expires_at = identity.expires_at
+    if expires_at is None or not math.isfinite(expires_at) or expires_at <= time.time():
         raise HTTPException(401, "An unexpired bearer token is required.", headers={"WWW-Authenticate": "Bearer"})
-    feed = request.app.state.run_feed
+    feed: RunFeed = request.app.state.run_feed
+    loop = asyncio.get_running_loop()
 
     def resolve_user():
         try:
@@ -70,62 +81,58 @@ async def run_events(request: Request, identity: Annotated[ValidatedIdentity, De
 
     user = await asyncio.to_thread(resolve_user)
     try:
-        sub = feed.subscribe(user.id, asyncio.get_running_loop())
+        sub = feed.subscribe(user.id, loop)
     except FeedLimitExceeded as exc:
         raise HTTPException(429, "The stream connection limit has been reached.") from exc
     except FeedUnavailable as exc:
         raise HTTPException(503, "Run notifications are unavailable.") from exc
     try:
-        snapshot = await asyncio.to_thread(feed.snapshot, sub)
+        # Snapshots run one at a time; a small dedicated pool keeps waiting ones from
+        # tying up the default executor that the access checks below also use.
+        snapshot = await loop.run_in_executor(request.app.state.run_feed_snapshots, feed.snapshot, sub)
     except BaseException as exc:
         feed.unsubscribe(sub)
         if not isinstance(exc, Exception):
             raise
         raise HTTPException(503, "Run notifications are unavailable.") from exc
 
-    async def stream():
-        async def access_error():
-            if time.time() >= identity.expires_at:
-                return "token_expired"
-            try:
-                active = await asyncio.to_thread(feed.store.is_active, user.id)
-            except Exception:
-                return "unavailable"
-            if time.time() >= identity.expires_at:
-                return "token_expired"
-            return None if active else "access_denied"
+    async def access_error() -> str | None:
+        if time.time() >= expires_at:
+            return "token_expired"
+        try:
+            active = await asyncio.to_thread(feed.is_active, user.id)
+        except Exception:
+            return "unavailable"
+        if time.time() >= expires_at:
+            return "token_expired"
+        return None if active else "access_denied"
 
+    async def stream() -> AsyncIterator[str]:
+        yield f"retry: {random.randint(RETRY_MIN_MS, RETRY_MAX_MS)}\n\n"
         error = await access_error()
-        if error:
-            yield frame("stream.error", {"code": error})
-            return
-        yield frame("runs.snapshot", {"items": [run_data(run) for run in snapshot]})
+        if error is None:
+            yield frame("runs.snapshot", {"items": [run_data(run) for run in snapshot]})
         heartbeat_at = time.monotonic() + HEARTBEAT_SECONDS
-        while True:
+        while error is None:
             error, updates = feed.drain(sub)
-            if error:
-                yield frame("stream.error", {"code": error})
-                return
+            heartbeat_due = time.monotonic() >= heartbeat_at
+            # One access check per batch, not per update.
+            if error is None and (updates or heartbeat_due):
+                error = await access_error()
+            if error is None and time.time() >= expires_at:
+                error = "token_expired"
+            if error is not None:
+                break
             for run in updates:
-                error = await access_error()
-                if error:
-                    yield frame("stream.error", {"code": error})
-                    return
                 yield frame("run.updated", run_data(run))
-            if time.monotonic() >= heartbeat_at:
-                error = await access_error()
-                if error:
-                    yield frame("stream.error", {"code": error})
-                    return
+            if heartbeat_due:
                 yield ": heartbeat\n\n"
                 heartbeat_at = time.monotonic() + HEARTBEAT_SECONDS
-            remaining = identity.expires_at - time.time()
-            if remaining <= 0:
-                yield frame("stream.error", {"code": "token_expired"})
-                return
+            timeout = min(expires_at - time.time(), heartbeat_at - time.monotonic())
             try:
-                await asyncio.wait_for(sub.changed.wait(), min(remaining, max(0, heartbeat_at - time.monotonic())))
+                await asyncio.wait_for(sub.changed.wait(), max(0, timeout))
             except TimeoutError:
                 pass
+        yield frame("stream.error", {"code": error})
 
     return RunEventResponse(stream(), feed, sub)

@@ -1,4 +1,8 @@
-"""Notify connected APIs after committed public run changes."""
+"""Notify connected APIs after committed public run changes.
+
+Payload is "<run_id>" or "<run_id>:<requested_by>". Artifact rows only carry
+run_id; looking up the owner there would need extra grants for every writer.
+"""
 from alembic import op
 
 revision = "0006_run_notifications"
@@ -24,7 +28,9 @@ def upgrade():
             RETURN NULL;
           END IF;
         END IF;
-        PERFORM pg_catalog.pg_notify('mic3_run_changes', NEW.id::text);
+        -- Owner lets listeners skip users with no open stream.
+        PERFORM pg_catalog.pg_notify('mic3_run_changes',
+          NEW.id::text || COALESCE(':' || NEW.requested_by::text, ''));
       ELSIF TG_OP = 'DELETE' THEN
         PERFORM pg_catalog.pg_notify('mic3_run_changes', OLD.run_id::text);
       ELSE

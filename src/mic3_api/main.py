@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import asyncio
 
@@ -36,6 +37,7 @@ def create_app(
                        total=app_settings.sse_max_streams,
                        pending=app_settings.sse_pending_runs)
     notifications = RunNotifications(app_settings, run_feed)
+    snapshot_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="run-feed-snapshot")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -44,6 +46,7 @@ def create_app(
             yield
         finally:
             await asyncio.to_thread(notifications.stop)
+            snapshot_executor.shutdown(wait=False, cancel_futures=True)
             app_database.dispose()
 
     app = FastAPI(
@@ -56,6 +59,7 @@ def create_app(
     app.state.database = app_database
     app.state.settings = app_settings
     app.state.run_feed = run_feed
+    app.state.run_feed_snapshots = snapshot_executor
     app.state.token_validator = app_token_validator
     app.include_router(api_router)
     return app

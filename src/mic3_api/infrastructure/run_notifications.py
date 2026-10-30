@@ -8,6 +8,14 @@ import psycopg
 LOG = logging.getLogger(__name__)
 
 
+def parse_payload(payload: str) -> tuple[UUID, UUID | None]:
+    """Read "<run_id>" or "<run_id>:<owner_id>"; raise ValueError for anything else."""
+    run_id, separator, owner = payload.partition(":")
+    if separator and not owner:
+        raise ValueError(payload)
+    return UUID(run_id), UUID(owner) if owner else None
+
+
 class RunNotifications:
     def __init__(self, settings, feed):
         self.feed = feed
@@ -47,14 +55,17 @@ class RunNotifications:
                     delay = 1
                     while not self.stop_event.is_set():
                         # Bound each batch and drain the socket even when no users listen.
-                        ids = set()
+                        changes: dict[UUID, UUID | None] = {}
                         for notification in connection.notifies(timeout=0.5, stop_after=100):
                             try:
-                                ids.add(UUID(notification.payload))
+                                run_id, owner = parse_payload(notification.payload)
                             except ValueError:
                                 LOG.warning("Ignoring malformed run notification")
-                        if ids:
-                            self.feed.publish(ids)
+                                continue
+                            # Artifact notifications carry no owner; keep one if any sender knew it.
+                            changes[run_id] = owner or changes.get(run_id)
+                        if changes:
+                            self.feed.publish(changes)
             except Exception:
                 LOG.warning("Run notification listener unavailable; reconnecting")
                 self.feed.unavailable()

@@ -53,6 +53,22 @@ def test_commits_rollback_artifacts_and_noop_updates(migrated_engine, postgres_t
         assert notifications(listener) == [str(run.id)]
 
 
+def test_owned_run_notification_carries_owner(migrated_engine, postgres_test_settings):
+    from uuid import uuid4
+    from mic3_api.infrastructure.persistence.users import User
+    release = register(migrated_engine)
+    owner = uuid4()
+    with listen(postgres_test_settings) as listener, Session(migrated_engine) as session:
+        with session.begin():
+            session.add(User(id=owner))
+        run = submit(session, release.id, owner)
+        assert notifications(listener) == [f"{run.id}:{owner}"]
+        with session.begin():
+            session.get(Run, run.id).status = "succeeded"
+            session.add(RunArtifact(run_id=run.id, object_key="outputs/a.csv", bucket="private", size_bytes=1))
+        assert sorted(notifications(listener)) == sorted([f"{run.id}:{owner}", str(run.id)])
+
+
 def test_trigger_security_and_downgrade(migrated_engine, postgres_test_settings, alembic_config):
     release = register(migrated_engine)
     with Session(migrated_engine) as session:
