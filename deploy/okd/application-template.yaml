@@ -13,6 +13,12 @@ parameters:
   value: '5'
 - name: RUN_MAX_ACTIVE_GLOBAL
   value: '20'
+- name: SSE_MAX_STREAMS_PER_USER
+  value: '5'
+- name: SSE_MAX_STREAMS
+  value: '100'
+- name: SSE_PENDING_RUNS
+  value: '100'
 objects:
 - apiVersion: apps/v1
   kind: Deployment
@@ -59,6 +65,12 @@ objects:
           - name: http
             containerPort: 8000
           env:
+          - name: SSE_MAX_STREAMS_PER_USER
+            value: ${SSE_MAX_STREAMS_PER_USER}
+          - name: SSE_MAX_STREAMS
+            value: ${SSE_MAX_STREAMS}
+          - name: SSE_PENDING_RUNS
+            value: ${SSE_PENDING_RUNS}
           - name: RUN_MAX_ACTIVE_PER_USER
             value: ${RUN_MAX_ACTIVE_PER_USER}
           - name: RUN_MAX_ACTIVE_GLOBAL

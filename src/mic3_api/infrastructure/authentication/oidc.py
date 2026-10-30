@@ -91,6 +91,7 @@ class OidcAccessTokenValidator:
             raise InvalidAccessTokenError
 
         return ValidatedIdentity(
+            expires_at=float(claims["exp"]),
             issuer=issuer,
             subject=subject,
             email=self._optional_profile_claim(claims, "email"),

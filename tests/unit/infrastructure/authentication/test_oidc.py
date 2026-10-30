@@ -143,6 +143,7 @@ def test_validates_token_and_maps_standard_profile_claims(
 
     assert identity.issuer == oidc_server.issuer
     assert identity.subject == "Case-Sensitive-Subject"
+    assert identity.expires_at is not None
     assert identity.email == "member@example.org"
     assert identity.display_name == "Member Name"
 

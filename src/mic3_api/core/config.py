@@ -40,6 +40,9 @@ class Settings(DatabaseSettings):
     app_name: str = "mic3-api"
     run_max_active_per_user: int = Field(default=5, gt=0)
     run_max_active_global: int = Field(default=20, gt=0)
+    sse_max_streams_per_user: int = Field(default=5, gt=0)
+    sse_max_streams: int = Field(default=100, gt=0)
+    sse_pending_runs: int = Field(default=100, gt=0)
     oidc_issuer_url: str
     oidc_audience: str
     oidc_allowed_algorithms: tuple[str, ...] = ("RS256",)

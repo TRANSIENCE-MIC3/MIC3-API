@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 
@@ -9,6 +10,9 @@ from mic3_api.api.router import api_router
 from mic3_api.core.config import Settings
 from mic3_api.infrastructure.authentication import OidcAccessTokenValidator
 from mic3_api.infrastructure.database import Database, DatabaseGateway
+from mic3_api.application.runs.feed import RunFeed
+from mic3_api.infrastructure.persistence.run_feed import SqlAlchemyRunFeed
+from mic3_api.infrastructure.run_notifications import RunNotifications
 
 
 def create_app(
@@ -27,12 +31,19 @@ def create_app(
         http_timeout_seconds=app_settings.oidc_http_timeout_seconds,
         jwks_cache_seconds=app_settings.oidc_jwks_cache_seconds,
     )
+    run_feed = RunFeed(SqlAlchemyRunFeed(app_database),
+                       per_user=app_settings.sse_max_streams_per_user,
+                       total=app_settings.sse_max_streams,
+                       pending=app_settings.sse_pending_runs)
+    notifications = RunNotifications(app_settings, run_feed)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        notifications.start()
         try:
             yield
         finally:
+            await asyncio.to_thread(notifications.stop)
             app_database.dispose()
 
     app = FastAPI(
@@ -44,6 +55,7 @@ def create_app(
     )
     app.state.database = app_database
     app.state.settings = app_settings
+    app.state.run_feed = run_feed
     app.state.token_validator = app_token_validator
     app.include_router(api_router)
     return app

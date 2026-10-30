@@ -3,7 +3,7 @@ from dataclasses import fields
 from pathlib import PurePosixPath
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from mic3_api.application.runs.queries import RunDetail, RunFile, RunSummary
@@ -15,11 +15,15 @@ def summary_values(run: Run) -> dict:
 
 
 class SqlAlchemyRunQueries:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, *, statement_timeout_ms: int | None = None):
         self._session = session
+        self._statement_timeout_ms = statement_timeout_ms
 
     def find(self, run_id: UUID) -> RunDetail | None:
         with self._session.begin():
+            if self._statement_timeout_ms is not None:
+                self._session.execute(text("SELECT set_config('statement_timeout', :timeout, true)"),
+                                      {"timeout": str(self._statement_timeout_ms)})
             # One statement observes state and artifacts at the same MVCC snapshot.
             rows = self._session.execute(
                 select(Run, RunArtifact).outerjoin(RunArtifact, RunArtifact.run_id == Run.id)

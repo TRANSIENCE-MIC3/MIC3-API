@@ -49,8 +49,7 @@ automatically retry an ambiguous submission response.
 Missing/invalid authentication returns `401`, inactive accounts or forbidden
 run access `403`, missing runs/releases `404`, invalid input `422`, and unavailable
 authentication/database dependencies `503`. No schema migration is needed for
-these routes. SSE is deferred to the next commit; the reusable authorized snapshot
-query supports current-state updates, not replay of every transition.
+these REST routes. The SSE endpoint below requires migration 0006_run_notifications.
 
 An opt-in smoke test submits **one real buildings execution** and waits for success:
 set `API_BASE_URL`, `OIDC_ACCESS_TOKEN`, `RUN_MODEL_RELEASE_ID`, and
@@ -58,6 +57,68 @@ set `API_BASE_URL`, `OIDC_ACCESS_TOKEN`, `RUN_MODEL_RELEASE_ID`, and
 `RUN_SMOKE_TIMEOUT_SECONDS` defaults to 1800. A timeout does not cancel the run;
 keep its printed ID for inspection. Run this only against an intended environment
 after release approval.
+
+## Personal SSE feed through Postman
+
+Apply `python -m alembic upgrade head` before starting/deploying the new API.
+Migration `0006_run_notifications` adds one security-invoker notification function
+and row triggers on `runs` and `run_artifacts`. It adds no tables, columns, indexes,
+extensions or stored history. Downgrade removes only the triggers/function.
+
+Open `GET {{base_url}}/runs/events` with your Bearer token (optionally set
+`Accept: text/event-stream`). Leave it open and submit runs from another Postman
+tab. One connection receives all of your runs, including new submissions. Admins
+also receive only their own runs. Postman displays named SSE events:
+
+- `runs.snapshot`: `{"items": [...]}` containing full run-detail objects for all
+  owned queued/running runs and the newest 50 terminal runs, newest first.
+- `run.updated`: one full run-detail object, matching `GET /runs/{id}`.
+- `stream.error`: `{"code": "..."}` followed by closure. Codes are `unavailable`,
+  `resync_required`, `token_expired`, and `access_denied`.
+
+Heartbeat comments arrive every 15 seconds; they do not query run statuses.
+The feed stays open after individual runs finish. Notifications are commit-only
+wakeups, not durable events: intermediate transitions can coalesce, and updates
+can repeat. On reconnect a new snapshot restores current state; older history
+is available through `GET /runs`. `Last-Event-ID` is ignored and no replay is promised.
+
+When the token expires, reconnect with a refreshed token. Local account activity
+is checked before sending data and at heartbeat intervals; this does not perform
+OIDC introspection or detect provider-side token revocation before expiry.
+A future browser client should use streaming `fetch` with an Authorization header,
+not a token in the URL. Refresh the snapshot window on reconnect; fetch older
+history again if it was displayed and needs reconciliation.
+
+New connections receive `401` for invalid/expired tokens, `403` for inactive
+accounts, `429` for connection limits, or `503` when the listener/database is
+unavailable. After headers are sent, failures use `stream.error` where possible.
+On transient failure, reconnect with exponential backoff (1 to 30 seconds).
+Do not retry `401`/`403` until authentication/access is resolved.
+
+One dedicated autocommit PostgreSQL connection and listener thread serves each
+API process. The API still has no Kafka consumer. Listener failures close streams;
+the listener retries independently. REST remains available, `/health` stays public,
+and `/ready` continues to check PostgreSQL only. Notification migration absence
+leaves SSE unavailable. Logs report listener outages without credentials.
+
+Settings (environment and OKD template parameters), all positive integers:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `SSE_MAX_STREAMS_PER_USER` | 5 | Connections per user, per API process |
+| `SSE_MAX_STREAMS` | 100 | Total connections per API process |
+| `SSE_PENDING_RUNS` | 100 | Distinct pending run updates per connection |
+
+Slow clients exceeding the pending bound receive `resync_required` and must
+reconnect. A blocked send is cut off after 30 seconds; an error frame may not be
+deliverable. Connections and transactions for ordinary queries are short-lived;
+the listener does not hold a transaction open while waiting. Notification payloads
+contain only run UUIDs; notification failure can roll back the originating write.
+
+After release approval, verify immediate events and 15-second heartbeats through
+the actual EOSC route, then observe two buildings runs in one feed and reconnect.
+No route timeout change is currently required by local evidence. Do not treat
+local streaming tests as confirmation of EOSC proxy behavior.
 
 ## Releases
 

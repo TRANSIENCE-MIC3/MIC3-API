@@ -5,6 +5,7 @@ from mic3_api.api.routes.readiness import router as readiness_router
 from mic3_api.api.routes.users import router as users_router
 from mic3_api.api.routes.models import router as models_router
 from mic3_api.api.routes.runs import router as runs_router
+from mic3_api.api.routes.run_events import router as run_events_router
 
 
 api_router = APIRouter()
@@ -12,4 +13,5 @@ api_router.include_router(health_router)
 api_router.include_router(readiness_router)
 api_router.include_router(users_router)
 api_router.include_router(models_router)
+api_router.include_router(run_events_router)
 api_router.include_router(runs_router)
