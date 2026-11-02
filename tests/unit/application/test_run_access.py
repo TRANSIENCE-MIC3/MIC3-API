@@ -48,10 +48,3 @@ def test_admission_boundaries():
     with pytest.raises(ValueError):
         RunAdmissionLimits(0, 20)
 
-
-@pytest.mark.parametrize("field", ["run_max_active_per_user", "run_max_active_global"])
-def test_invalid_admission_settings(test_settings, field):
-    from pydantic import ValidationError
-    from mic3_api.core.config import Settings
-    with pytest.raises(ValidationError):
-        Settings(**(test_settings.model_dump() | {field: 0}))

@@ -15,9 +15,7 @@ import uvicorn
 from mic3_api.infrastructure.persistence.execution import Run, RunArtifact
 from mic3_api.infrastructure.persistence.users import User
 from mic3_api.main import create_app
-from tests.integration.api.test_current_user import IDENTITY, StubTokenValidator
-from tests.integration.api.test_admin_users import grant
-from tests.integration.infrastructure.test_model_runs import register, submit
+from tests.integration.factories import IDENTITY, StubTokenValidator, grant, register, submit
 
 pytestmark = pytest.mark.live_notifications
 

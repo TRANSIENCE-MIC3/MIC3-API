@@ -1,14 +1,13 @@
 from uuid import UUID, uuid4
 
-import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, func, inspect, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from mic3_api.core.config import Settings
+from tests.integration.factories import assert_rejected
 from mic3_api.infrastructure.persistence import (
     Base,
     Role,
@@ -154,16 +153,8 @@ def test_identity_keys_are_exact_and_scoped_by_issuer(
         (other_issuer, subject),
     }
 
-    with pytest.raises(IntegrityError):
-        with migrated_engine.begin() as connection:
-            connection.execute(
-                UserIdentity.__table__.insert(),
-                {
-                    "issuer": issuer,
-                    "subject": subject,
-                    "user_id": second_user_id,
-                },
-            )
+    assert_rejected(migrated_engine, UserIdentity.__table__.insert(),
+                    {"issuer": issuer, "subject": subject, "user_id": second_user_id})
 
 
 def test_users_allow_duplicate_and_null_emails_without_implicit_roles(
@@ -202,12 +193,7 @@ def test_user_role_primary_key_rejects_duplicate_assignments(
             {"user_id": user_id, "role_name": "member"},
         )
 
-    with pytest.raises(IntegrityError):
-        with migrated_engine.begin() as connection:
-            connection.execute(
-                UserRole.__table__.insert(),
-                {"user_id": user_id, "role_name": "member"},
-            )
+    assert_rejected(migrated_engine, UserRole.__table__.insert(), {"user_id": user_id, "role_name": "member"})
 
 
 def test_identity_and_role_foreign_keys_are_enforced(
@@ -219,27 +205,8 @@ def test_identity_and_role_foreign_keys_are_enforced(
     with migrated_engine.begin() as connection:
         connection.execute(User.__table__.insert(), {"id": existing_user_id})
 
-    with pytest.raises(IntegrityError):
-        with migrated_engine.begin() as connection:
-            connection.execute(
-                UserIdentity.__table__.insert(),
-                {
-                    "issuer": "https://identity.example/realm",
-                    "subject": "missing-user",
-                    "user_id": missing_user_id,
-                },
-            )
-
-    with pytest.raises(IntegrityError):
-        with migrated_engine.begin() as connection:
-            connection.execute(
-                UserRole.__table__.insert(),
-                {"user_id": missing_user_id, "role_name": "member"},
-            )
-
-    with pytest.raises(IntegrityError):
-        with migrated_engine.begin() as connection:
-            connection.execute(
-                UserRole.__table__.insert(),
-                {"user_id": existing_user_id, "role_name": "nonexistent"},
-            )
+    assert_rejected(migrated_engine, UserIdentity.__table__.insert(), {
+        "issuer": "https://identity.example/realm", "subject": "missing-user", "user_id": missing_user_id})
+    assert_rejected(migrated_engine, UserRole.__table__.insert(), {"user_id": missing_user_id, "role_name": "member"})
+    assert_rejected(migrated_engine, UserRole.__table__.insert(),
+                    {"user_id": existing_user_id, "role_name": "nonexistent"})

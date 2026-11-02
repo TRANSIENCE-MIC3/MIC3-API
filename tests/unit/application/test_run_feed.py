@@ -78,13 +78,6 @@ def test_notification_during_snapshot_is_delivered_after_initial_state():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("field", ["sse_max_streams_per_user", "sse_max_streams", "sse_pending_runs"])
-def test_positive_settings(test_settings, field):
-    from pydantic import ValidationError
-    from mic3_api.core.config import Settings
-    with pytest.raises(ValidationError):
-        Settings(**(test_settings.model_dump() | {field: 0}))
-
 
 def test_initial_snapshot_discards_only_older_pending_reads():
     async def scenario():

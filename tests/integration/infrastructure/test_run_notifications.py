@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from mic3_api.infrastructure.persistence.execution import Run, RunArtifact
-from tests.integration.infrastructure.test_model_runs import register, submit
+from tests.integration.factories import register, submit
 
 
 def listen(settings):

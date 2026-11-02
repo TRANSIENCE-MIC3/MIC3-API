@@ -1,23 +1,18 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from alembic import command
-from sqlalchemy import create_engine, event, select, inspect
+import pytest
+from sqlalchemy import MetaData, Table, create_engine, event, inspect, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
-import pytest
 
-from mic3_api.application.models.catalog import RegisterRelease
-from mic3_api.application.runs.acceptance import AcceptRun
-from mic3_api.application.runs.execution import Artifact
-from mic3_api.application.runs.submission import SubmitRun
-from mic3_api.infrastructure.persistence.execution import Run, OutboxEvent, RunArtifact
-from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
-from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
-from mic3_api.infrastructure.persistence.run_acceptance import SqlAlchemyRunAcceptance
-from mic3_api.application.runs.execution import ReconcileExecutions
+from mic3_api.application.runs.execution import Artifact, ReconcileExecutions
+from mic3_api.infrastructure.persistence.execution import OutboxEvent, Run, RunArtifact
 from mic3_api.infrastructure.persistence.run_execution import SqlAlchemyExecutions
 from tests.catalog_data import CONFIG, PARAMETERS
+from tests.integration.factories import accept, queued_run
 
 
 def claim(store):
@@ -25,12 +20,9 @@ def claim(store):
 
 
 def accepted(engine):
-    with Session(engine) as s:
-        catalog = SqlAlchemyModelCatalog(s)
-        release = RegisterRelease(catalog).execute(CONFIG)
-        run = SubmitRun(catalog, SqlAlchemyRunSubmissions(s)).execute(release.id, PARAMETERS)
-        AcceptRun(SqlAlchemyRunAcceptance(s)).execute(run.id)
-        return run.id
+    run = queued_run(engine)
+    accept(engine, run.id)
+    return run.id
 
 
 def test_claim_capacity_locks_and_terminal_idempotency(migrated_engine):
@@ -88,8 +80,6 @@ def test_stale_claim_fails_without_dispatch(migrated_engine):
 def test_upgrade_from_0004_preserves_runs(alembic_config, postgres_test_settings):
     command.upgrade(alembic_config, "0004_run_acceptance")
     engine = create_engine(postgres_test_settings.database_url)
-    from sqlalchemy import MetaData, Table
-    from uuid import uuid4
     metadata = MetaData()
     tables = {n:Table(n,metadata,autoload_with=engine) for n in ('models','model_releases','runs')}
     release_id, run_id = uuid4(), uuid4()

@@ -1,5 +1,4 @@
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -10,7 +9,7 @@ from mic3_api.application.models.execution import ExecutionDefinition, Invocatio
 from mic3_api.application.runs.fingerprint import fingerprint
 from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.cli_runs import read_json
-from tests.catalog_data import CONFIG
+from tests.catalog_data import CONFIG, release_definition
 
 
 @pytest.fixture
@@ -38,9 +37,7 @@ def test_modes_resolve_distinct_invocations_and_match_metadata(release):
 
 @pytest.mark.parametrize("mode", list(CONFIG["execution_definition"]["modes"]))
 def test_registered_catalog_modes_are_usable(mode):
-    catalog = Mock()
-    RegisterRelease(catalog).execute(CONFIG)
-    definition = catalog.register.call_args.args[0]
+    definition = release_definition()
     effective = definition.execution_definition.prepare({"mode": mode})
     assert effective == {"mode": mode}
     assert definition.execution_definition.resolve(effective).to_dict() == CONFIG["execution_definition"]["modes"][mode]

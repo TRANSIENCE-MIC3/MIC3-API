@@ -12,25 +12,17 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import RegisterRelease
 from mic3_api.application.runs.publication import PublicationError, PublishOutbox
-from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.infrastructure.kafka_publication import KafkaEventPublisher
 from mic3_api.infrastructure.persistence.execution import OutboxEvent
-from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.outbox import SqlAlchemyOutbox
-from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
 from tests.catalog_data import CONFIG, PARAMETERS
+from tests.integration.factories import queued_run as submit
 
 TOPIC = "mic3.run.requests.v1"
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def submit(engine):
-    with Session(engine) as session:
-        catalog = SqlAlchemyModelCatalog(session)
-        release = RegisterRelease(catalog).execute(CONFIG)
-        return SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(release.id, PARAMETERS)
 
 
 def pending(engine):

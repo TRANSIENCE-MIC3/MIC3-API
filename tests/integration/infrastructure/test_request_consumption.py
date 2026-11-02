@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from threading import Event
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, TopicPartition
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -15,20 +15,17 @@ from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import RegisterRelease
 from mic3_api.application.runs.publication import PublishOutbox
-from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.core.worker_config import WorkerSettings
 from mic3_api.infrastructure.kafka_consumption import KafkaRequestConsumer
 from mic3_api.infrastructure.database import Database
 from mic3_api.infrastructure.kafka_publication import KafkaEventPublisher
 from mic3_api.infrastructure.persistence.execution import Run
-from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.outbox import SqlAlchemyOutbox
 from mic3_api.infrastructure.persistence.rejections import RejectedMessage
-from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
 from mic3_api.worker import run
 from tests.catalog_data import CONFIG, PARAMETERS
+from tests.integration.factories import queued_run
 
 
 @pytest.fixture
@@ -46,11 +43,10 @@ def flow(migrated_engine, kafka_broker):
                            group=group, settings=settings, database=database, factory=factory)
 
 
+
+
 def submit(flow):
-    with Session(flow.engine) as session:
-        catalog = SqlAlchemyModelCatalog(session)
-        release = RegisterRelease(catalog).execute(CONFIG)
-        return SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(release.id, PARAMETERS)
+    return queued_run(flow.engine)
 
 
 def publish(flow):
@@ -116,7 +112,6 @@ def test_cli_submission_publication_and_worker_restart(flow, tmp_path):
     release = json.loads(cli("mic3_api.cli", "register-model-release", "--config", str(config)).stdout)
     submitted = json.loads(cli("mic3_api.cli", "submit-run", "--release-id", release["id"],
                                "--parameters", str(parameters)).stdout)
-    from uuid import UUID
     run_id = UUID(submitted["id"])
     cli("mic3_api.publisher", "--once")
     assert "outcome=accepted" in cli("mic3_api.worker", "--once").stderr

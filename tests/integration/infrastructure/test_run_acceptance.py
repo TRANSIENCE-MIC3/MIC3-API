@@ -9,40 +9,18 @@ from sqlalchemy import MetaData, Table, create_engine, event, inspect, select, u
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mic3_api.application.models.catalog import ModelError, RegisterRelease
+from mic3_api.application.models.catalog import ModelError
 from mic3_api.application.runs.acceptance import AcceptRun
-from mic3_api.application.runs.submission import SubmitRun
 from mic3_api.infrastructure.persistence.execution import Run
 from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
 from mic3_api.infrastructure.persistence.run_acceptance import SqlAlchemyRunAcceptance
-from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
-from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 from tests.catalog_data import CONFIG, MODE, PARAMETERS
+from tests.integration.factories import accept, changed_config, queued_run as submit, register, show
 
 
-def register(engine, config=None):
-    with Session(engine) as session:
-        return RegisterRelease(SqlAlchemyModelCatalog(session)).execute(config or CONFIG)
-
-
-def submit(engine, config=None):
-    release = register(engine, config)
-    with Session(engine) as session:
-        return SubmitRun(SqlAlchemyModelCatalog(session), SqlAlchemyRunSubmissions(session)).execute(
-            release.id, PARAMETERS,
-        )
-
-
-def accept(engine, run_id):
-    with Session(engine) as session:
-        result = AcceptRun(SqlAlchemyRunAcceptance(session)).execute(run_id)
-        assert not session.in_transaction()
-        return result
-
-
-def show(engine, run_id):
-    with Session(engine) as session:
-        return SqlAlchemyRunInspection(session).show(run_id)
+def set_status(engine, run_id, status):
+    with engine.begin() as connection:
+        connection.execute(update(Run).where(Run.id == run_id).values(status=status))
 
 
 def test_concurrent_acceptance_returns_one_timestamp_and_keeps_queued(migrated_engine):
@@ -62,13 +40,7 @@ def test_concurrent_acceptance_returns_one_timestamp_and_keeps_queued(migrated_e
 @pytest.mark.parametrize("change", ["command", "remove"])
 def test_incompatible_unaccepted_run_is_failed_without_acceptance(migrated_engine, change):
     run = submit(migrated_engine)
-    config = deepcopy(CONFIG)
-    modes = config["execution_definition"]["modes"]
-    if change == "command":
-        modes[MODE]["arguments"] = ["changed"]
-    else:
-        modes["other"] = modes.pop(MODE)
-    register(migrated_engine, config)
+    register(migrated_engine, changed_config(change))
     outcome = accept(migrated_engine, run.id)
     assert outcome.status == "failed"
     assert outcome.failure_code == "execution_definition_changed"
@@ -79,9 +51,7 @@ def test_incompatible_unaccepted_run_is_failed_without_acceptance(migrated_engin
 
 def test_optional_outputs_can_be_added_before_acceptance(migrated_engine):
     run = submit(migrated_engine)
-    config = deepcopy(CONFIG)
-    config["execution_definition"]["modes"][MODE]["required_outputs"] = ["export/result.csv"]
-    register(migrated_engine, config)
+    register(migrated_engine, changed_config("outputs"))
     outcome = accept(migrated_engine, run.id)
     assert outcome.accepted_at is not None
     assert outcome.fingerprint == run.fingerprint
@@ -92,19 +62,9 @@ def test_optional_outputs_can_be_added_before_acceptance(migrated_engine):
 def test_active_mode_changes_blocked_and_registration_rolls_back(migrated_engine, status, change):
     run = submit(migrated_engine)
     accept(migrated_engine, run.id)
-    with migrated_engine.begin() as connection:
-        connection.execute(update(Run).where(Run.id == run.id).values(status=status))
-    config = deepcopy(CONFIG)
-    config["display_name"] = "Must roll back"
-    modes = config["execution_definition"]["modes"]
-    if change == "command":
-        modes[MODE]["arguments"] = ["changed"]
-    elif change == "outputs":
-        modes[MODE]["required_outputs"] = ["result.csv"]
-    else:
-        modes["other"] = modes.pop(MODE)
+    set_status(migrated_engine, run.id, status)
     with pytest.raises(ModelError, match="accepted unfinished"):
-        register(migrated_engine, config)
+        register(migrated_engine, changed_config(change, display_name="Must roll back"))
     with Session(migrated_engine) as session:
         release = SqlAlchemyModelCatalog(session).get_release(run.model_release_id)
     assert release.definition.display_name == CONFIG["display_name"]
@@ -134,11 +94,8 @@ def test_display_name_unrelated_modes_and_new_image_remain_editable(migrated_eng
 def test_terminal_runs_release_protection_without_becoming_eligible(migrated_engine, status):
     run = submit(migrated_engine)
     accepted = accept(migrated_engine, run.id)
-    with migrated_engine.begin() as connection:
-        connection.execute(update(Run).where(Run.id == run.id).values(status=status))
-    config = deepcopy(CONFIG)
-    config["execution_definition"]["modes"][MODE]["arguments"] = ["changed"]
-    register(migrated_engine, config)
+    set_status(migrated_engine, run.id, status)
+    register(migrated_engine, changed_config())
     outcome = accept(migrated_engine, run.id)
     assert outcome.status == status
     assert outcome.accepted_at == accepted.accepted_at
@@ -163,22 +120,17 @@ def test_mode_stays_protected_until_all_accepted_runs_are_terminal(migrated_engi
     first, second = submit(migrated_engine), submit(migrated_engine)
     accept(migrated_engine, first.id)
     accept(migrated_engine, second.id)
-    with migrated_engine.begin() as connection:
-        connection.execute(update(Run).where(Run.id == first.id).values(status="succeeded"))
-    config = deepcopy(CONFIG)
-    config["execution_definition"]["modes"][MODE]["arguments"] = ["changed"]
+    set_status(migrated_engine, first.id, "succeeded")
     with pytest.raises(ModelError, match="accepted unfinished"):
-        register(migrated_engine, config)
-    with migrated_engine.begin() as connection:
-        connection.execute(update(Run).where(Run.id == second.id).values(status="failed"))
-    register(migrated_engine, config)
+        register(migrated_engine, changed_config())
+    set_status(migrated_engine, second.id, "failed")
+    register(migrated_engine, changed_config())
 
 
 @pytest.mark.parametrize("first", ["accept", "register"])
 def test_acceptance_and_registration_serialize_on_release(migrated_engine, first):
     run = submit(migrated_engine)
-    changed = deepcopy(CONFIG)
-    changed["execution_definition"]["modes"][MODE]["arguments"] = ["changed"]
+    changed = changed_config()
     locked, attempted = Event(), Event()
     threads = {}
 
