@@ -4,11 +4,13 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine
+from alembic.script import ScriptDirectory
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.pool import NullPool
 from testcontainers.community.postgres import PostgresContainer
 
 from mic3_api.core.config import Settings
+from mic3_api.infrastructure.persistence import Base
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -44,39 +46,84 @@ def postgres_test_settings() -> Iterator[Settings]:
         )
 
 
+def _alembic(settings: Settings) -> Config:
+    """Alembic aimed at the disposable test database, never at .env settings."""
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    config.attributes["database_url"] = settings.database_url
+    return config
+
+
+def _point_environment_at(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI commands and subprocesses read the database from the environment."""
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DB_HOST", settings.db_host)
+    monkeypatch.setenv("DB_PORT", str(settings.db_port))
+    monkeypatch.setenv("DB_NAME", settings.db_name)
+    monkeypatch.setenv("DB_USER", settings.db_user)
+    monkeypatch.setenv("DB_PASSWORD", settings.db_password.get_secret_value())
+
+
+class MigratedSchema:
+    """The schema at head, migrated once per session, with its seed rows remembered."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.config = _alembic(settings)
+        self.head = ScriptDirectory.from_config(self.config).get_current_head()
+        command.downgrade(self.config, "base")
+        command.upgrade(self.config, "head")
+        self.engine = create_engine(settings.database_url, poolclass=NullPool)
+        with self.engine.connect() as connection:
+            # Rows the migrations seed (the roles); restored after every test.
+            self.seeds = {table: [dict(row._mapping) for row in connection.execute(table.select())]
+                          for table in Base.metadata.sorted_tables}
+
+    def reset(self) -> None:
+        """Empty every table and restore the seeds. Skipped if a migration test moved the schema;
+        alembic_config rebuilds it in that case."""
+        with self.engine.begin() as connection:
+            if connection.scalar(text("SELECT version_num FROM alembic_version")) != self.head:
+                return
+            names = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
+            connection.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+            for table, rows in self.seeds.items():
+                if rows:
+                    connection.execute(table.insert(), rows)
+
+
+@pytest.fixture(scope="session")
+def migrated_schema(postgres_test_settings: Settings) -> Iterator[MigratedSchema]:
+    schema = MigratedSchema(postgres_test_settings)
+    try:
+        yield schema
+    finally:
+        schema.engine.dispose()
+
+
 @pytest.fixture
 def alembic_config(
     postgres_test_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Config]:
-    """Point Alembic exclusively at the disposable test database."""
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("DB_HOST", postgres_test_settings.db_host)
-    monkeypatch.setenv("DB_PORT", str(postgres_test_settings.db_port))
-    monkeypatch.setenv("DB_NAME", postgres_test_settings.db_name)
-    monkeypatch.setenv("DB_USER", postgres_test_settings.db_user)
-    monkeypatch.setenv(
-        "DB_PASSWORD",
-        postgres_test_settings.db_password.get_secret_value(),
-    )
-
-    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    """For migration tests: the schema starts empty, and is rebuilt to head afterwards."""
+    _point_environment_at(postgres_test_settings, monkeypatch)
+    config = _alembic(postgres_test_settings)
     command.downgrade(config, "base")
     try:
         yield config
     finally:
         command.downgrade(config, "base")
+        command.upgrade(config, "head")
 
 
 @pytest.fixture
 def migrated_engine(
-    alembic_config: Config,
+    migrated_schema: MigratedSchema,
     postgres_test_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Engine]:
-    """Upgrade a clean schema and expose a short-lived SQLAlchemy engine."""
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(postgres_test_settings.database_url, poolclass=NullPool)
+    """An engine on the schema at head; every table is emptied after the test."""
+    _point_environment_at(postgres_test_settings, monkeypatch)
     try:
-        yield engine
+        yield migrated_schema.engine
     finally:
-        engine.dispose()
+        migrated_schema.reset()

@@ -3,18 +3,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
 
 from mic3_api.api.dependencies import get_current_user
+from mic3_api.api.dependencies.use_cases import get_list_users
 from mic3_api.application.users import CurrentUser
-from mic3_api.api.dependencies.database import get_session
-from mic3_api.application.users.administration import AdminRequiredError, ListUsers
-from mic3_api.infrastructure.persistence.user_administration import (
-    SqlAlchemyUserAdministrationUnitOfWork,
-)
+from mic3_api.application.users.administration import ListUsers
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -46,19 +41,11 @@ class UserDirectoryResponse(BaseModel):
 })
 def list_users(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[Session, Depends(get_session)],
+    list_all: Annotated[ListUsers, Depends(get_list_users)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> UserDirectoryResponse:
-    try:
-        accounts = ListUsers().execute(
-            current_user, SqlAlchemyUserAdministrationUnitOfWork(session),
-            limit=limit, offset=offset,
-        )
-    except AdminRequiredError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except SQLAlchemyError as exc:
-        raise HTTPException(status_code=503, detail="Database access is unavailable.") from exc
+    accounts = list_all.execute(current_user, limit=limit, offset=offset)
     return UserDirectoryResponse(
         items=[UserDirectoryItem(
             id=user.id, email=user.email, display_name=user.display_name,
@@ -72,15 +59,9 @@ def list_users(
     "/me",
     response_model=CurrentUserResponse,
     responses={
-        status.HTTP_401_UNAUTHORIZED: {
-            "description": "The bearer token is missing or invalid."
-        },
-        status.HTTP_403_FORBIDDEN: {
-            "description": "The local MIC3 account is inactive."
-        },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "OIDC or PostgreSQL is temporarily unavailable."
-        },
+        status.HTTP_401_UNAUTHORIZED: {"description": "The bearer token is missing or invalid."},
+        status.HTTP_403_FORBIDDEN: {"description": "The local MIC3 account is inactive."},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "OIDC or PostgreSQL is temporarily unavailable."},
     },
 )
 def read_current_user(

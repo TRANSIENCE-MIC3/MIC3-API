@@ -49,10 +49,7 @@ def test_concurrent_first_requests_resolve_one_atomic_account(
             display_name="Concurrent Member",
         )
         with Session(migrated_engine) as session:
-            return ResolveCurrentUser().execute(
-                identity,
-                BarrierUnitOfWork(session),
-            )
+            return ResolveCurrentUser(BarrierUnitOfWork(session)).execute(identity)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [

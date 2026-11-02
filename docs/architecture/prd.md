@@ -12,7 +12,7 @@ from independent scientific models. This document records intended architecture;
 The model catalog, EU-MFA parameter validation and atomic run/outbox submission
 are implemented, together with Kafka, outbox publication, database-backed run
 acceptance and an execution worker. Kubernetes execution and artifact persistence
-are deployed locally and on EOSC. Authenticated API submission is the next milestone;
+are deployed locally and on EOSC. Authenticated API submission and a personal SSE feed are implemented;
 shared-result reuse remains deferred.
 Artifacts use Helm-managed AIStor and MinIO Client copy; broader operational
 qualification remains open. See local project status for evidence and next steps.
@@ -28,6 +28,8 @@ flowchart LR
     publisher --> kafka[Kafka]
     kafka --> worker[Worker]
     worker --> db
+    db -. LISTEN / NOTIFY .-> api
+    api -. personal SSE .-> user
     worker --> jobs[Kubernetes Jobs: model containers]
     jobs --> storage[(Persistent artifacts)]
     worker --> storage
@@ -144,8 +146,9 @@ nullable publication time. A separate publisher sends acknowledged, versioned
 after acknowledgement but before database commit retains the same event ID.
 Identical submissions remain separate queued runs and events. Terminal
 `run.succeeded`/`run.failed` events use `mic3.run.events.v1`; requests use
-`mic3.run.requests.v1`. Authenticated run submission/status endpoints are next;
-their authorization and admission contracts must be defined before implementation.
+`mic3.run.requests.v1`. Authenticated submission derives ownership from the local
+principal; API admission bounds queued/running work, while the operator CLI keeps
+its bypass. Detail permits owner/admin access; listing and SSE are personal-only.
 Attempt tracking remains deferred.
 The CLI requires operator database access.
 
@@ -255,6 +258,32 @@ or output storage. Disposable result-cache misses fall back to durable data;
 authorization and execution correctness must not depend on cache availability.
 Adding Redis still requires invalidation, expiry, memory/failure policies, and
 tests. Do not introduce an unused generic cache framework now.
+
+## Personal run notifications
+
+`GET /runs/events` maintains one authenticated personal feed per client connection.
+Each API process has one shared PostgreSQL LISTEN connection and a bounded local
+dispatcher. Migration 0006 adds a security-invoker function and triggers on public
+run state and artifact changes; notifications contain only run IDs and are delivered
+after commit. The API rereads authoritative run details and sends them only to the
+owner, including when the connected user is an administrator. Existing GET-by-ID
+admin access is separate from the personal feed.
+
+The initial snapshot includes all active owned runs and the newest 50 terminal
+runs. Commit notifications wake subsequent reads; no periodic run-status polling
+or Kafka consumer runs in the API. Listener recovery and client reconnect use fresh
+snapshots, not durable replay. Bounded queues coalesce updates per run; overflow
+requires reconnect. Terminal updates leave the shared feed open. Token expiry,
+inactive accounts, disconnects and infrastructure failure end the connection.
+Ordinary database sessions are short-lived; LISTEN uses a separate autocommit
+connection. Runtime roles need no elevated permissions. Notification failure can
+fail the enclosing write, so the listener must never retain a transaction while idle.
+
+Kafka remains the durable execution transport. Using it for this feed would require
+additional lifecycle events, consumer credentials/dependencies and per-process
+broadcast delivery (a single shared consumer group would distribute rather than
+broadcast). PostgreSQL notifications fit the current latest-state contract without
+a new service or event-history schema.
 
 ## Identity and security
 

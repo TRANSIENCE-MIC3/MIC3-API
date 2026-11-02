@@ -13,7 +13,7 @@ MODEL_ID = 'mic3-deployment-check'
 
 
 def register_and_submit(session, image):
-    from mic3_api.application.models.catalog import register_release
+    from mic3_api.application.models.catalog import RegisterRelease
     from mic3_api.application.runs.submission import SubmitRun
     from mic3_api.infrastructure.persistence.model_catalog import SqlAlchemyModelCatalog
     from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
@@ -25,7 +25,7 @@ def register_and_submit(session, image):
                 "from pathlib import Path; Path('/outputs/result.txt').write_bytes(" + repr(EXPECTED) + ")"],
             'working_directory': '/tmp', 'output_directory': '/outputs',
             'required_outputs': ['result.txt']}}}}
-    release = register_release(definition, catalog)
+    release = RegisterRelease(catalog).execute(definition)
     run = SubmitRun(catalog, SqlAlchemyRunSubmissions(session)).execute(release.id, {'mode': 'check'})
     print(json.dumps({'run_id': str(run.id)}), flush=True)
     return run.id
@@ -76,7 +76,7 @@ def main():
     from botocore.config import Config
     from mic3_api.core.config import DatabaseSettings
     from mic3_api.infrastructure.database import Database
-    from mic3_api.infrastructure.persistence.run_submissions import SqlAlchemyRunSubmissions
+    from mic3_api.infrastructure.persistence.run_inspection import SqlAlchemyRunInspection
 
     database = None
     storage = None
@@ -89,7 +89,7 @@ def main():
                 retries={'total_max_attempts': 2, 'mode': 'standard'}, s3={'addressing_style': 'path'}))
         with database.open_session() as session:
             run_id = register_and_submit(session, os.environ['CHECK_MODEL_IMAGE'])
-            store = SqlAlchemyRunSubmissions(session)
+            store = SqlAlchemyRunInspection(session)
             wait_for_run(lambda: store.show(run_id), storage, os.environ['ARTIFACT_BUCKET'])
         return 0
     except Exception as exc:
