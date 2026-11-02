@@ -2,60 +2,61 @@ from importlib.metadata import version
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
-from mic3_api.core.config import Settings
 from mic3_api.main import create_app
 
 
-def test_health_returns_expected_response(test_settings: Settings) -> None:
-    with TestClient(create_app(settings=test_settings)) as client:
-        response = client.get("/health")
+class StubDatabase:
+    def __init__(self, error: SQLAlchemyError | None = None) -> None:
+        self.error = error
+        self.ping_calls = 0
+        self.disposed = False
 
-        assert response.status_code == 200
-        assert response.json() == {"status": "healthy"}
+    def ping(self) -> None:
+        self.ping_calls += 1
+        if self.error is not None:
+            raise self.error
+
+    def dispose(self) -> None:
+        self.disposed = True
 
 
-def test_docs_are_available(test_settings: Settings) -> None:
-    with TestClient(create_app(settings=test_settings)) as client:
-        response = client.get("/docs")
-
-        assert response.status_code == 200
+def probe(test_settings, path: str, database: StubDatabase):
+    with TestClient(create_app(settings=test_settings, database=database)) as client:
+        return client.get(path)
 
 
-def test_openapi_schema_contains_health_endpoints(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("APP_NAME", "Integration Test API")
-    monkeypatch.setenv("DB_HOST", "localhost")
-    monkeypatch.setenv("DB_NAME", "mic3")
-    monkeypatch.setenv("DB_USER", "mic3_api")
-    monkeypatch.setenv("DB_PASSWORD", "test-only-password")
-    monkeypatch.setenv("OIDC_ISSUER_URL", "https://issuer.test/realms/mic3")
-    monkeypatch.setenv("OIDC_AUDIENCE", "mic3-api")
+def test_health_never_queries_the_database(test_settings):
+    database = StubDatabase(SQLAlchemyError("database unavailable"))
+    response = probe(test_settings, "/health", database)
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
+    assert database.ping_calls == 0
 
-    with TestClient(create_app()) as client:
-        response = client.get("/openapi.json")
-        schema = response.json()
 
-        assert response.status_code == 200
-        assert "/health" in schema["paths"]
-        assert "/ready" in schema["paths"]
-        assert "/users/me" in schema["paths"]
-        assert "/models" in schema["paths"]
-        bearer_schemes = {
-            name
-            for name, security_scheme in schema["components"][
-                "securitySchemes"
-            ].items()
-            if security_scheme.get("type") == "http"
-            and security_scheme.get("scheme") == "bearer"
-        }
-        assert bearer_schemes
-        assert schema["paths"]["/users/me"]["get"]["security"] == [
-            {bearer_schemes.pop(): []}
-        ]
-        assert "security" not in schema["paths"]["/health"]["get"]
-        assert "security" not in schema["paths"]["/ready"]["get"]
-        assert "security" not in schema["paths"]["/models"]["get"]
-        assert schema["info"]["title"] == "Integration Test API"
-        assert schema["info"]["version"] == version("mic3-api")
+@pytest.mark.parametrize("error,code,status", [(None, 200, "ready"),
+                                               (SQLAlchemyError("unavailable"), 503, "not_ready")])
+def test_ready_reflects_database_reachability(test_settings, error, code, status):
+    database = StubDatabase(error)
+    response = probe(test_settings, "/ready", database)
+    assert response.status_code == code
+    assert response.json() == {"status": status}
+    assert database.ping_calls == 1
+    assert database.disposed is True
+
+
+def test_docs_and_openapi_schema(test_settings):
+    settings = test_settings.model_copy(update={"app_name": "Integration Test API"})
+    with TestClient(create_app(settings=settings)) as client:
+        assert client.get("/docs").status_code == 200
+        schema = client.get("/openapi.json").json()
+
+    assert {"/health", "/ready", "/users/me", "/models"} <= schema["paths"].keys()
+    bearer = [name for name, scheme in schema["components"]["securitySchemes"].items()
+              if scheme.get("type") == "http" and scheme.get("scheme") == "bearer"]
+    assert len(bearer) == 1
+    assert schema["paths"]["/users/me"]["get"]["security"] == [{bearer[0]: []}]
+    for public in ("/health", "/ready", "/models"):
+        assert "security" not in schema["paths"][public]["get"]
+    assert schema["info"] == {"title": "Integration Test API", "version": version("mic3-api")}

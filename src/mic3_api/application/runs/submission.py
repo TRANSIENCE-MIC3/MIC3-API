@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from mic3_api.application.models.catalog import Catalog
 from mic3_api.application.runs.fingerprint import fingerprint
+from mic3_api.application.runs.status import RunStatus
 
 
 @dataclass(frozen=True)
@@ -15,7 +16,7 @@ class QueuedRun:
     requested_by: UUID | None
     parameters: dict
     fingerprint: str
-    status: str = "queued"
+    status: str = RunStatus.QUEUED
 
 
 class RunSubmissionStore(Protocol):
@@ -25,6 +26,8 @@ class RunSubmissionStore(Protocol):
 
 
 class SubmitRun:
+    """Queue a run. HTTP callers pass the resolved user's ID as requested_by."""
+
     def __init__(self, catalog: Catalog, store: RunSubmissionStore) -> None:
         self._catalog = catalog
         self._store = store

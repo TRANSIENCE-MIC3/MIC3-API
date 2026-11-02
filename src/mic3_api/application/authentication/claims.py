@@ -11,3 +11,4 @@ class ValidatedIdentity:
     subject: str
     email: str | None = None
     display_name: str | None = None
+    expires_at: float | None = None

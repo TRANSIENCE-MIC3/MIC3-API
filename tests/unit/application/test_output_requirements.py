@@ -5,19 +5,12 @@ import json
 
 import pytest
 
-from mic3_api.application.models.catalog import ModelError, register_release
+from mic3_api.application.models.catalog import ModelError
 from mic3_api.application.models.catalog_changes import ensure_active_modes_unchanged
 from mic3_api.application.models.execution import ExecutionDefinition
 from mic3_api.application.models.outputs import OutputRequirements
 from mic3_api.application.runs.fingerprint import fingerprint
-from tests.catalog_data import CONFIG, MODE, PARAMETERS
-from unittest.mock import Mock
-
-
-def definition(config):
-    catalog = Mock()
-    register_release(config, catalog)
-    return catalog.register.call_args.args[0]
+from tests.catalog_data import CONFIG, MODE, PARAMETERS, release_definition as definition
 
 
 def test_output_requirements_preserve_legacy_fingerprint_and_roundtrip():

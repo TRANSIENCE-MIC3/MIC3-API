@@ -2,12 +2,8 @@
 
 import argparse
 import logging
-import signal
 import time
 from threading import Event
-
-from confluent_kafka import KafkaException
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 from mic3_api.application.runs.acceptance import AcceptRun
 from mic3_api.application.runs.consumption import ConsumeRequest
@@ -17,21 +13,10 @@ from mic3_api.infrastructure.kafka_consumption import KafkaRequestConsumer
 from mic3_api.infrastructure.persistence.rejections import SqlAlchemyRejections
 from mic3_api.infrastructure.persistence.run_acceptance import SqlAlchemyRunAcceptance
 from mic3_api.infrastructure.request_envelope import decode_request
+from mic3_api.infrastructure.retry import is_retryable
+from mic3_api.process import stop_on_signals
 
 LOG = logging.getLogger(__name__)
-
-
-def retryable(error: Exception) -> bool:
-    if isinstance(error, KafkaException):
-        return not error.args[0].fatal()
-    if isinstance(error, DBAPIError):
-        code = getattr(error.orig, "sqlstate", None)
-        if code is None:
-            return error.connection_invalidated or isinstance(error, (OperationalError, InterfaceError))
-        return error.connection_invalidated or code.startswith(("08", "40", "53")) or code in {
-            "55P03", "57014", "57P01", "57P02", "57P03",
-        }
-    return False
 
 
 def run(database, consumer_factory, settings: WorkerSettings, stop: Event, *, once=False) -> int:
@@ -58,7 +43,7 @@ def run(database, consumer_factory, settings: WorkerSettings, stop: Event, *, on
                 if once:
                     return 0
         except Exception as exc:
-            if not retryable(exc):
+            if not is_retryable(exc):
                 LOG.error("Worker stopped (%s); unconfirmed record retained.", type(exc).__name__)
                 return 1
             LOG.warning("Worker outcome=retry (%s); resuming from committed offsets.", type(exc).__name__)
@@ -78,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--execute", action="store_true", help="Also dispatch and reconcile accepted model Jobs")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    stop, previous, database = Event(), {}, None
+    stop, database = Event(), None
     try:
         if args.execute:
             from mic3_api.core.execution_config import ExecutionSettings
@@ -88,20 +73,20 @@ def main(argv: list[str] | None = None) -> int:
         database = Database(settings.database_url,
                             statement_timeout_ms=settings.worker_statement_timeout_ms,
                             lock_timeout_ms=settings.worker_lock_timeout_ms)
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, lambda *_: stop.set())
-        consumer_factory = lambda: KafkaRequestConsumer(settings.kafka_bootstrap_servers,
-                   settings.kafka_requests_topic, settings.kafka_consumer_group, security=settings)
-        if args.execute:
-            from mic3_api.execution_runtime import run_with_execution
-            return run_with_execution(database, consumer_factory, settings, stop, run)
-        return run(database, consumer_factory, settings, stop, once=args.once)
+
+        def consumer_factory():
+            return KafkaRequestConsumer(settings.kafka_bootstrap_servers, settings.kafka_requests_topic,
+                                        settings.kafka_consumer_group, security=settings)
+
+        with stop_on_signals(stop):
+            if args.execute:
+                from mic3_api.execution_runtime import run_with_execution
+                return run_with_execution(database, consumer_factory, settings, stop, run)
+            return run(database, consumer_factory, settings, stop, once=args.once)
     except Exception as exc:
         LOG.error("Worker initialization or shutdown failed (%s).", type(exc).__name__)
         return 1
     finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
         if database is not None:
             database.dispose()
 

@@ -143,6 +143,7 @@ def test_validates_token_and_maps_standard_profile_claims(
 
     assert identity.issuer == oidc_server.issuer
     assert identity.subject == "Case-Sensitive-Subject"
+    assert identity.expires_at is not None
     assert identity.email == "member@example.org"
     assert identity.display_name == "Member Name"
 
@@ -294,16 +295,16 @@ def test_signed_external_admin_claims_never_elevate_login(oidc_server):
     accounts = Accounts()
     uow = SimpleNamespace(users=accounts, transaction=nullcontext)
     validator = _validator(oidc_server)
-    resolver = ResolveCurrentUser()
+    resolver = ResolveCurrentUser(uow)
     for name in ["local_admin", "master_admin"]:
         identity = validator.validate(_token(oidc_server, claims={
             "name": name, "preferred_username": name, "roles": ["admin"],
             "realm_access": {"roles": ["admin", "realm-admin"]},
             "resource_access": {"mic3-api": {"roles": ["admin"]}},
         }))
-        assert resolver.execute(identity, uow).roles == ("member",)
+        assert resolver.execute(identity).roles == ("member",)
     accounts.account = replace(accounts.account, roles=frozenset({"member", "admin"}))
     identity = validator.validate(_token(oidc_server, claims={"name": "Updated profile"}))
-    current = resolver.execute(identity, uow)
+    current = resolver.execute(identity)
     assert current.display_name == "Updated profile"
     assert current.roles == ("admin", "member")

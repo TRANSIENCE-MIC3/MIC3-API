@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
+import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy, LogMessageWaitStrategy
 
+pytestmark = pytest.mark.environment
 
 ROOT = Path(__file__).resolve().parents[3]
 LOCAL_REALM = ROOT / "deploy" / "local" / "keycloak" / "config"

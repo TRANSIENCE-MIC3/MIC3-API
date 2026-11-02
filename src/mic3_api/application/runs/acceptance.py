@@ -6,18 +6,13 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
-from mic3_api.application.models.catalog import ModelError, ReleaseDefinition
-from mic3_api.application.runs.fingerprint import fingerprint
+from mic3_api.application.models.catalog import ReleaseDefinition
+from mic3_api.application.runs.errors import RunNotFound
+from mic3_api.application.runs.fingerprint import matches_fingerprint
+from mic3_api.application.runs.status import RunStatus
 
-
-class RunNotFound(ModelError):
-    """The requested run has no durable submission."""
-
-
-@dataclass(frozen=True)
-class AcceptanceResult:
-    run: "RunForAcceptance"
-    outcome: str
+__all__ = ["AcceptRun", "AcceptanceResult", "AcceptanceTransaction", "RunAcceptanceStore",
+           "RunForAcceptance", "RunNotFound"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +23,12 @@ class RunForAcceptance:
     status: str
     accepted_at: datetime | None
     failure_code: str | None
+
+
+@dataclass(frozen=True)
+class AcceptanceResult:
+    run: RunForAcceptance
+    outcome: str
 
 
 class AcceptanceTransaction(Protocol):
@@ -55,17 +56,12 @@ class AcceptRun:
     def execute_with_outcome(self, run_id: UUID) -> AcceptanceResult:
         with self._store.transaction(run_id) as transaction:
             run = transaction.run
-            if run.accepted_at is not None or run.status != "queued":
+            if run.accepted_at is not None or run.status != RunStatus.QUEUED:
                 return AcceptanceResult(run, "unchanged")
-            release = transaction.load_release()
-            try:
-                compatible = fingerprint(release, run.parameters) == run.fingerprint
-            except ModelError:
-                # The selected mode may have been removed before acceptance.
-                compatible = False
+            compatible = matches_fingerprint(transaction.load_release(), run.parameters, run.fingerprint)
             if compatible:
                 outcome = replace(run, accepted_at=datetime.now(timezone.utc))
             else:
-                outcome = replace(run, status="failed", failure_code="execution_definition_changed")
+                outcome = replace(run, status=RunStatus.FAILED, failure_code="execution_definition_changed")
             transaction.save_outcome(outcome)
         return AcceptanceResult(outcome, "accepted" if compatible else "failed-run")

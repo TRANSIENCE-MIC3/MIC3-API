@@ -7,7 +7,8 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from mic3_api.application.runs.consumption import RecordLocation
 from mic3_api.infrastructure.kafka_consumption import KafkaRecord
-from mic3_api.worker import retryable, run
+from mic3_api.infrastructure.retry import is_retryable as retryable
+from mic3_api.worker import run
 
 
 def test_unexpected_failure_stops_without_commit_and_closes_consumer():

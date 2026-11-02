@@ -7,10 +7,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from mic3_api.application.models.catalog import (
-    ExecutionDefinition, ModelError, ModelRelease, ReleaseDefinition,
+    ExecutionDefinition, ModelRelease, ReleaseDefinition,
 )
 from mic3_api.application.models.catalog_changes import ensure_active_modes_unchanged
+from mic3_api.application.models.errors import ModelReleaseNotFound
+from mic3_api.application.runs.status import ACTIVE_STATUSES
 from mic3_api.infrastructure.persistence.execution import Model, ModelReleaseRow, Run
+from mic3_api.infrastructure.persistence.mappers import release_definition
 
 
 class SqlAlchemyModelCatalog:
@@ -42,7 +45,7 @@ class SqlAlchemyModelCatalog:
             else:
                 active_modes = self._session.scalars(select(Run.parameters["mode"].astext).where(
                     Run.model_release_id == release.id,
-                    Run.accepted_at.is_not(None), Run.status.in_(("queued", "running")),
+                    Run.accepted_at.is_not(None), Run.status.in_(ACTIVE_STATUSES),
                 ).distinct())
                 ensure_active_modes_unchanged(
                     ExecutionDefinition.from_dict(release.execution_definition),
@@ -58,7 +61,7 @@ class SqlAlchemyModelCatalog:
                 ModelReleaseRow.id == release_id,
             )).one_or_none()
             if row is None:
-                raise ModelError("Model release does not exist.")
+                raise ModelReleaseNotFound("Model release does not exist.")
             return self._snapshot(*row)
 
     def list_releases(self) -> list[ModelRelease]:
@@ -70,7 +73,4 @@ class SqlAlchemyModelCatalog:
 
     @staticmethod
     def _snapshot(release: ModelReleaseRow, model: Model) -> ModelRelease:
-        return ModelRelease(release.id, ReleaseDefinition(
-            model.id, model.display_name, release.image_digest,
-            ExecutionDefinition.from_dict(release.execution_definition),
-        ))
+        return ModelRelease(release.id, release_definition(model, release))

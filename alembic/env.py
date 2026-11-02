@@ -15,10 +15,15 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def database_url():
+    """Callers such as tests may pass a URL; otherwise read application settings."""
+    return config.attributes.get("database_url") or DatabaseSettings().database_url
+
+
 def run_migrations_offline() -> None:
     """Configure an offline migration context without opening a connection."""
     context.configure(
-        url=DatabaseSettings().database_url.render_as_string(hide_password=False),
+        url=database_url().render_as_string(hide_password=False),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -31,7 +36,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Configure an online migration context using application settings."""
     connectable = create_engine(
-        DatabaseSettings().database_url,
+        database_url(),
         poolclass=pool.NullPool,
         connect_args={"connect_timeout": 3},
     )
