@@ -18,7 +18,7 @@ the Helm/mc buildings Job also completed on 2026-10-05, with copied files
 confirmed by the user. Downloaded-file hashes, concurrency, and scoped permission checks remain open.
 
 Published image:
-`ghcr.io/transience-mic3/eu-mfa@sha256:a96dd9d7e548b4abe7d3992b905bb605fc1a5f9206a7f65e75d497aa29e9268b`
+`ghcr.io/transience-mic3/eu-mfa@sha256:4bcdcc9848732e8ea11aa339ba82448527755f6ea4fe42ee5defe5476d3da41c`
 
 The base image and upstream source are pinned. Upstream pins direct dependencies;
 transitive dependencies are not locked. Local evidence, logs, comparisons, and
@@ -31,15 +31,15 @@ Start Docker Desktop with Linux containers. From the MIC3 repository root, run
 these PowerShell commands, checking each command succeeds before continuing:
 
 ```powershell
-docker build --platform linux/amd64 -f integrations/eu_mfa/Dockerfile -t eu-mfa:87e94f4 integrations/eu_mfa
+docker build --platform linux/amd64 -f integrations/eu_mfa/Dockerfile -t eu-mfa:80aac47 integrations/eu_mfa
 $outputDirectory = Join-Path $env:TEMP ('eu-mfa-buildings-' + [guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $outputDirectory
-docker run --rm --network none --mount "type=bind,source=$outputDirectory,target=/opt/eu-mfa/data/baseline_buildings/output" eu-mfa:87e94f4
+docker run --rm --network none --mount "type=bind,source=$outputDirectory,target=/opt/eu-mfa/data/baseline_buildings/output" eu-mfa:80aac47
 Get-ChildItem -LiteralPath (Join-Path $outputDirectory 'export/flows')
-docker run --rm --entrypoint python eu-mfa:87e94f4 -m pip freeze
+docker run --rm --entrypoint python eu-mfa:80aac47 -m pip freeze
 ```
 
-The current baseline is expected to export ten flow CSVs and two stock CSVs.
+The current baseline (upstream `80aac47`) is expected to export twelve CSVs under `export/flows`.
 File presence alone does not establish scientific correctness. Compare headers,
 dimensions, and numerical values with the host baseline before acceptance.
 
@@ -60,8 +60,8 @@ The image source label associates this package with `TRANSIENCE-MIC3/MIC3-API`;
 separate labels retain the upstream source and commit.
 
 ```powershell
-$imageRef = 'ghcr.io/transience-mic3/eu-mfa:87e94f4'
-docker tag eu-mfa:87e94f4 $imageRef
+$imageRef = 'ghcr.io/transience-mic3/eu-mfa:80aac47'
+docker tag eu-mfa:80aac47 $imageRef
 docker push $imageRef
 docker image inspect $imageRef --format '{{json .RepoDigests}}'
 ```

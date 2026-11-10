@@ -1,0 +1,20 @@
+{
+  "model_id": "forecast-sites",
+  "display_name": "FORECAST-Sites",
+  "image_digest": "ghcr.io/transience-mic3/forecast-sites@sha256:0c80e1b8653dbb764165594d4358fb141d9b3d48d8087f1fb98d87bae25a9690",
+  "execution_definition": {
+    "modes": {
+      "por-example": {
+        "arguments": [
+          "python",
+          "src/main.py"
+        ],
+        "working_directory": "/opt/forecast-sites",
+        "output_directory": "/opt/forecast-sites/output",
+        "required_outputs": [
+          "output.sqlite"
+        ]
+      }
+    }
+  }
+}

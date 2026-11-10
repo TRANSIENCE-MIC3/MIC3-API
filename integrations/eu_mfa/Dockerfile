@@ -1,7 +1,7 @@
 FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
 
 # Package the complete upstream source snapshot without modifying model code.
-ARG EUMFA_COMMIT=87e94f42d36b2487b16c74b1d81372994a6a41e7
+ARG EUMFA_COMMIT=80aac47bfe491725684893379ad9b541770928a8
 ADD https://github.com/wupperinst/transience-eu-mfa/archive/${EUMFA_COMMIT}.tar.gz /tmp/eu-mfa.tar.gz
 
 WORKDIR /opt/eu-mfa
